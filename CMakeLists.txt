@@ -9,6 +9,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         src/plugin/dllmain.cpp
         src/plugin/mumble_link.cpp
         src/plugin/marker.cpp
+        src/plugin/config.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp
         ${IMGUI_SRC})
