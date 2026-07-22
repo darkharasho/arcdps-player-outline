@@ -20,6 +20,26 @@ void save_config(const Config& c, const char* path) {
     std::fclose(f);
 }
 
+static float clampf(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// Keep loaded values inside their slider ranges. Guards against garbage/stale
+// ini values (e.g. an old pixel radius reused after the field became meters).
+static void sanitize(Config& c) {
+    if ((int)c.style < 0 || (int)c.style > 4) c.style = MarkerStyle::GroundRing;
+    for (int i = 0; i < 3; ++i) c.color[i] = clampf(c.color[i], 0.0f, 1.0f);
+    c.opacity      = clampf(c.opacity, 0.05f, 1.0f);
+    c.ring_radius  = clampf(c.ring_radius, 0.2f, 2.5f);
+    c.glow_width   = clampf(c.glow_width, 0.4f, 2.0f);
+    c.glow_amount  = clampf(c.glow_amount, 0.0f, 2.0f);
+    c.char_height  = clampf(c.char_height, 0.8f, 3.2f);
+    c.chevron_size = clampf(c.chevron_size, 8.0f, 80.0f);
+    c.head_offset  = clampf(c.head_offset, 0.0f, 3.5f);
+    c.beam_height  = clampf(c.beam_height, 0.5f, 6.0f);
+    c.beam_width   = clampf(c.beam_width, 2.0f, 40.0f);
+}
+
 void load_config(Config& c, const char* path) {
     FILE* f = std::fopen(path, "r");
     if (!f) return;
@@ -42,6 +62,7 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "beam_width"))   c.beam_width = v;
     }
     std::fclose(f);
+    sanitize(c);
 }
 
 void draw_options(Config& c) {
