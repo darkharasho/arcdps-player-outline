@@ -93,3 +93,9 @@ A native Windows build (MSVC/clang-cl) is also possible — the code is standard
 - Visual inspiration: the Minecraft [Player-Outline](https://github.com/neilrush/Player-Outline) mod (neilrush).
 - Built on [arcdps](https://www.deltaconnected.com/arcdps/) and [Dear ImGui](https://github.com/ocornut/imgui).
 - MumbleLink-on-Linux insight from reading how sibling tools locate the block via `/proc`.
+
+## License
+
+[MIT](LICENSE) © 2026 darkharasho.
+
+Vendored dependencies keep their own licenses: [Dear ImGui](https://github.com/ocornut/imgui) (MIT) and [doctest](https://github.com/doctest/doctest) (MIT), both under `third_party/`.
