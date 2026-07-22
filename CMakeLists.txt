@@ -8,6 +8,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     add_library(arcdps_player_outline SHARED
         src/plugin/dllmain.cpp
         src/plugin/mumble_link.cpp
+        src/plugin/marker.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp
         ${IMGUI_SRC})

@@ -2,21 +2,23 @@
 #include <cstdint>
 #include "imgui.h"
 #include "arcdps.h"
+#include "mumble_link.hpp"
+#include "marker.hpp"
+#include "camera.hpp"
 
 static arcdps_exports g_arc{};
 static const char* kName  = "player_outline";
 static const char* kBuild = "0.1.0";
-bool g_show_test_dot = true;
+static plugin::MumbleReader g_reader;
 
 // called each frame by arcdps; not_charsel_or_loading==1 when safe to draw
 static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     if (!not_charsel_or_loading) return 0;
-    if (g_show_test_dot) {
-        ImDrawList* dl = ImGui::GetBackgroundDrawList();
-        ImVec2 sz = ImGui::GetIO().DisplaySize;
-        dl->AddCircleFilled(ImVec2(sz.x*0.5f, sz.y*0.5f), 12.0f,
-                            IM_COL32(0,255,200,220), 32);
-    }
+    core::AvatarState avatar; core::CameraState cam;
+    if (!g_reader.sample(avatar, cam)) return 0;
+    ImVec2 sz = ImGui::GetIO().DisplaySize;
+    core::ScreenPoint feet = core::world_to_screen(avatar.position, cam, sz.x, sz.y);
+    plugin::draw_ground_ring(feet, 42.0f, IM_COL32(0,255,200,220));
     return 0;
 }
 
