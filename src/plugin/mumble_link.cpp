@@ -31,6 +31,19 @@ static const core::LinkedMem* scan() {
     return nullptr;
 }
 
+// Confirm a cached pointer still refers to a committed, readable region large
+// enough to hold a LinkedMem. Guards against the region being unmapped/reused
+// between frames — dereferencing a stale pointer in-process would crash GW2.
+static bool region_ok(const void* p) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(p, &mbi, sizeof mbi) == 0) return false;
+    const DWORD readable = PAGE_READWRITE | PAGE_READONLY | PAGE_WRITECOPY | PAGE_EXECUTE_READ;
+    if (mbi.State != MEM_COMMIT || !(mbi.Protect & readable) || (mbi.Protect & PAGE_GUARD))
+        return false;
+    uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+    return (uintptr_t)p + sizeof(core::LinkedMem) <= end;
+}
+
 // Torn-read-safe copy: GW2 rewrites the struct ~60x/sec. Read the tick, copy,
 // re-read the tick; if it changed we caught a half-written frame — retry.
 static bool copy_stable(const core::LinkedMem* src, core::LinkedMem& dst) {
@@ -50,7 +63,7 @@ static float fov_from_identity(const wchar_t* wid) {
 }
 
 bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam) {
-    if (!link_ || !looks_like_mumble(link_)) link_ = scan();
+    if (!link_ || !region_ok(link_) || !looks_like_mumble(link_)) link_ = scan();
     if (!link_) return false;
     core::LinkedMem lm;
     if (!copy_stable(link_, lm)) return false;
