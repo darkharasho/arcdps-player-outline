@@ -30,9 +30,26 @@ static void resolve_ini_path() {
                  (size_t)(g_ini + MAX_PATH - tail - 1));
 }
 
-static unsigned cfg_rgba() {
+static unsigned faded_rgba(float mul) {
+    float a = g_cfg.opacity * mul;
     return IM_COL32((int)(g_cfg.color[0] * 255), (int)(g_cfg.color[1] * 255),
-                    (int)(g_cfg.color[2] * 255), (int)(g_cfg.opacity * 255));
+                    (int)(g_cfg.color[2] * 255), (int)(a * 255));
+}
+
+// Project a world circle on the ground plane into pts[], shifted by the smoothed
+// offset. Returns false if any vertex is behind the camera.
+static bool build_ground_ring(const core::AvatarState& avatar, const core::CameraState& cam,
+                              ImVec2* pts, int n, float radius, float sw, float sh_,
+                              float ox, float oy) {
+    for (int i = 0; i < n; ++i) {
+        float a = 6.2831853f * i / n;
+        core::Vec3 wp = avatar.position +
+            core::Vec3{std::cos(a) * radius, 0.0f, std::sin(a) * radius};
+        core::ScreenPoint p = core::world_to_screen(wp, cam, sw, sh_);
+        if (p.behind) return false;
+        pts[i] = ImVec2(p.x + ox, p.y + oy);
+    }
+    return true;
 }
 
 // called each frame by arcdps; not_charsel_or_loading==1 when safe to draw
@@ -43,13 +60,41 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     if (!g_reader.sample(avatar, cam)) { reset_smoothing(); return 0; }
 
     ImVec2 sz = ImGui::GetIO().DisplaySize;
+
+    // Distance fade: subtle when the camera is close (solo), full when zoomed out.
+    float dist = core::length(cam.position - avatar.position);
+    float fade_mul = 1.0f;
+    if (g_cfg.fade_enabled) {
+        float t = (dist - g_cfg.fade_near) / (g_cfg.fade_far - g_cfg.fade_near);
+        if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+        fade_mul = 0.30f + 0.70f * t;
+    }
+    unsigned rgba = faded_rgba(fade_mul);
+
     core::ScreenPoint feet = core::world_to_screen(avatar.position, cam, sz.x, sz.y);
-    if (feet.behind || !feet.on_screen) { reset_smoothing(); return 0; }
+
+    // Off-screen (behind or past the edge): draw an edge arrow toward the player.
+    if (feet.behind || !feet.on_screen) {
+        reset_smoothing();
+        if (g_cfg.offscreen_arrow) {
+            core::Vec3 right = core::normalized(core::cross(cam.up, cam.front));
+            core::Vec3 to = avatar.position - cam.position;
+            float dx = core::dot(to, right);
+            float dy = -core::dot(to, cam.up);         // screen y grows downward
+            float len = std::sqrt(dx * dx + dy * dy);
+            if (len < 1e-4f) { dx = 0.0f; dy = -1.0f; } else { dx /= len; dy /= len; }
+            float cxs = sz.x * 0.5f, cys = sz.y * 0.5f;
+            float reach = sz.x > sz.y ? sz.x : sz.y;
+            core::EdgePoint e = core::clamp_to_edge(cxs + dx * reach, cys + dy * reach,
+                                                    sz.x, sz.y, g_cfg.arrow_size + 14.0f);
+            plugin::draw_arrow(e.x, e.y, e.angle_rad, g_cfg.arrow_size, rgba);
+        }
+        return 0;
+    }
 
     float dt = ImGui::GetIO().DeltaTime;
-    unsigned rgba = cfg_rgba();
 
-    // Anchor = the point we smooth. Feet for most styles; the head for chevron.
+    // Anchor to smooth: feet for most styles, the head for the standalone chevron.
     float ax = feet.x, ay = feet.y;
     if (g_cfg.style == plugin::MarkerStyle::Chevron) {
         core::Vec3 hw = avatar.position + core::Vec3{0.0f, g_cfg.head_offset, 0.0f};
@@ -62,42 +107,37 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
 
     switch (g_cfg.style) {
         case plugin::MarkerStyle::GroundRing:
-        case plugin::MarkerStyle::RingPip: {
-            // Project a world circle on the ground plane so it reads as a circle
-            // overhead and an ellipse from the side. Shift by the smoothed offset.
+        case plugin::MarkerStyle::RingPip:
+        case plugin::MarkerStyle::RingChevron: {
             const int N = 40;
             ImVec2 pts[N];
-            bool ok = true;
-            for (int i = 0; i < N; ++i) {
-                float a = 6.2831853f * i / N;
-                core::Vec3 wp = avatar.position +
-                    core::Vec3{std::cos(a) * g_cfg.ring_radius, 0.0f, std::sin(a) * g_cfg.ring_radius};
-                core::ScreenPoint p = core::world_to_screen(wp, cam, sz.x, sz.y);
-                if (p.behind) { ok = false; break; }
-                pts[i] = ImVec2(p.x + ox, p.y + oy);
-            }
-            if (ok) {
+            if (build_ground_ring(avatar, cam, pts, N, g_cfg.ring_radius, sz.x, sz.y, ox, oy)) {
                 plugin::draw_ground_ring(pts, N, rgba, 2.5f);
                 if (g_cfg.style == plugin::MarkerStyle::RingPip) {
                     core::ScreenPoint hp = core::world_to_screen(
                         avatar.position + core::Vec3{0.0f, 1.2f, 0.0f}, cam, sz.x, sz.y);
                     if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba);
+                } else if (g_cfg.style == plugin::MarkerStyle::RingChevron) {
+                    core::ScreenPoint hp = core::world_to_screen(
+                        avatar.position + core::Vec3{0.0f, 2.4f, 0.0f}, cam, sz.x, sz.y);
+                    float hx = hp.behind ? sx : hp.x + ox;
+                    float hy = hp.behind ? (sy - 60.0f) : hp.y + oy;
+                    plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba);
                 }
             }
             break;
         }
         case plugin::MarkerStyle::SilhouetteGlow: {
             float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
-            float dist  = core::length(cam.position - avatar.position);
-            if (dist < 0.5f) dist = 0.5f;
-            float full_px = focal * g_cfg.char_height / dist;   // side-on height
+            float d = dist < 0.5f ? 0.5f : dist;
+            float full_px = focal * g_cfg.char_height / d;   // side-on height
             if (full_px < 22.0f) full_px = 22.0f;
-            // Collapse height as the camera looks down: front.y ~0 side-on, ~1
-            // overhead. Width stays constant, so the capsule flattens to a disc.
+            // Collapse height as the camera looks down (front.y ~1 overhead); width
+            // stays constant so the capsule flattens to a disc.
             float side = 1.0f - std::fabs(cam.front.y);
             if (side < 0.0f) side = 0.0f; if (side > 1.0f) side = 1.0f;
             float body_px = full_px * side;
-            float min_h = full_px * 0.22f;                      // never fully vanish
+            float min_h = full_px * 0.22f;
             if (body_px < min_h) body_px = min_h;
             float width_px = full_px * 0.40f * g_cfg.glow_width;
             float sh = g_fh.filter(body_px, dt);

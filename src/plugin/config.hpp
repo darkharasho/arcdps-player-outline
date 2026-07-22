@@ -7,6 +7,7 @@ enum class MarkerStyle {
     Chevron        = 2,   // clean V above the head
     Beam           = 3,   // vertical light pillar
     RingPip        = 4,   // ground ring + floating pip
+    RingChevron    = 5,   // ground ring + overhead chevron
 };
 
 struct Config {
@@ -30,6 +31,13 @@ struct Config {
     // Beam
     float beam_height = 3.0f;    // meters
     float beam_width  = 12.0f;   // px
+
+    // Behavior
+    bool  fade_enabled = true;   // fade when the camera is zoomed in close (solo)
+    float fade_near    = 3.0f;   // meters: at/under -> most faded
+    float fade_far     = 14.0f;  // meters: at/over  -> full opacity
+    bool  offscreen_arrow = true;// edge arrow pointing to you when off-screen
+    float arrow_size   = 18.0f;  // px
 };
 
 void load_config(Config& c, const char* path);

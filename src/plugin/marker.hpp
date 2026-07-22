@@ -21,4 +21,7 @@ void draw_beam(float cx, float base_y, float top_y, float width_px, unsigned rgb
 // Small glowing pip (dot + halo).
 void draw_pip(float cx, float cy, float r_px, unsigned rgba);
 
+// Edge arrow at (cx, cy) pointing along angle_rad (toward the off-screen player).
+void draw_arrow(float cx, float cy, float angle_rad, float size_px, unsigned rgba);
+
 }

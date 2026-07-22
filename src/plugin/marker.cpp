@@ -1,4 +1,5 @@
 #include "marker.hpp"
+#include <cmath>
 
 namespace plugin {
 
@@ -68,6 +69,19 @@ void draw_pip(float cx, float cy, float r_px, unsigned rgba) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     dl->AddCircleFilled(ImVec2(cx, cy), r_px * 2.0f, with_alpha(rgba, 0.18f), 20);  // halo
     dl->AddCircleFilled(ImVec2(cx, cy), r_px, with_alpha(rgba, 1.0f), 16);
+}
+
+void draw_arrow(float cx, float cy, float angle_rad, float size_px, unsigned rgba) {
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    float ca = std::cos(angle_rad), sa = std::sin(angle_rad);
+    // tip points along the angle; two tails swept back
+    ImVec2 tip(cx + ca * size_px, cy + sa * size_px);
+    float back = size_px * 0.9f, spread = size_px * 0.7f;
+    ImVec2 l(cx - ca * back - sa * spread, cy - sa * back + ca * spread);
+    ImVec2 r(cx - ca * back + sa * spread, cy - sa * back - ca * spread);
+    dl->AddTriangleFilled(tip, l, r, with_alpha(rgba, 0.25f));           // glow underlay
+    dl->AddTriangle(tip, l, r, with_alpha(rgba, 1.0f), 2.0f);
+    dl->AddTriangleFilled(tip, l, r, with_alpha(rgba, 0.85f));
 }
 
 }

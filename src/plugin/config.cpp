@@ -17,6 +17,10 @@ void save_config(const Config& c, const char* path) {
                  c.glow_width, c.glow_amount, c.char_height);
     std::fprintf(f, "chevron_size=%.4f\nhead_offset=%.4f\n", c.chevron_size, c.head_offset);
     std::fprintf(f, "beam_height=%.4f\nbeam_width=%.4f\n", c.beam_height, c.beam_width);
+    std::fprintf(f, "fade_enabled=%d\nfade_near=%.4f\nfade_far=%.4f\n",
+                 c.fade_enabled ? 1 : 0, c.fade_near, c.fade_far);
+    std::fprintf(f, "offscreen_arrow=%d\narrow_size=%.4f\n",
+                 c.offscreen_arrow ? 1 : 0, c.arrow_size);
     std::fclose(f);
 }
 
@@ -27,7 +31,7 @@ static float clampf(float v, float lo, float hi) {
 // Keep loaded values inside their slider ranges. Guards against garbage/stale
 // ini values (e.g. an old pixel radius reused after the field became meters).
 static void sanitize(Config& c) {
-    if ((int)c.style < 0 || (int)c.style > 4) c.style = MarkerStyle::GroundRing;
+    if ((int)c.style < 0 || (int)c.style > 5) c.style = MarkerStyle::GroundRing;
     for (int i = 0; i < 3; ++i) c.color[i] = clampf(c.color[i], 0.0f, 1.0f);
     c.opacity      = clampf(c.opacity, 0.05f, 1.0f);
     c.ring_radius  = clampf(c.ring_radius, 0.2f, 2.5f);
@@ -38,6 +42,10 @@ static void sanitize(Config& c) {
     c.head_offset  = clampf(c.head_offset, 0.0f, 3.5f);
     c.beam_height  = clampf(c.beam_height, 0.5f, 6.0f);
     c.beam_width   = clampf(c.beam_width, 2.0f, 40.0f);
+    c.fade_near    = clampf(c.fade_near, 0.5f, 30.0f);
+    c.fade_far     = clampf(c.fade_far, 1.0f, 60.0f);
+    if (c.fade_far < c.fade_near + 0.5f) c.fade_far = c.fade_near + 0.5f;
+    c.arrow_size   = clampf(c.arrow_size, 8.0f, 48.0f);
 }
 
 void load_config(Config& c, const char* path) {
@@ -60,6 +68,11 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "head_offset"))  c.head_offset = v;
         else if (!std::strcmp(key, "beam_height"))  c.beam_height = v;
         else if (!std::strcmp(key, "beam_width"))   c.beam_width = v;
+        else if (!std::strcmp(key, "fade_enabled")) c.fade_enabled = (v != 0);
+        else if (!std::strcmp(key, "fade_near"))    c.fade_near = v;
+        else if (!std::strcmp(key, "fade_far"))     c.fade_far = v;
+        else if (!std::strcmp(key, "offscreen_arrow")) c.offscreen_arrow = (v != 0);
+        else if (!std::strcmp(key, "arrow_size"))   c.arrow_size = v;
     }
     std::fclose(f);
     sanitize(c);
@@ -69,9 +82,9 @@ void draw_options(Config& c) {
     ImGui::Checkbox("Show self marker", &c.enabled);
 
     const char* styles[] = { "Ground ring", "Silhouette glow", "Chevron (overhead)",
-                             "Beam", "Ring + pip" };
+                             "Beam", "Ring + pip", "Ring + chevron" };
     int s = (int)c.style;
-    if (ImGui::Combo("Style", &s, styles, 5)) c.style = (MarkerStyle)s;
+    if (ImGui::Combo("Style", &s, styles, 6)) c.style = (MarkerStyle)s;
 
     ImGui::ColorEdit3("Color", c.color);
     ImGui::SliderFloat("Opacity", &c.opacity, 0.05f, 1.0f, "%.2f");
@@ -80,7 +93,10 @@ void draw_options(Config& c) {
     switch (c.style) {
         case MarkerStyle::GroundRing:
         case MarkerStyle::RingPip:
+        case MarkerStyle::RingChevron:
             ImGui::SliderFloat("Ring size (m)", &c.ring_radius, 0.2f, 2.5f, "%.2f");
+            if (c.style == MarkerStyle::RingChevron)
+                ImGui::SliderFloat("Chevron size", &c.chevron_size, 8.0f, 80.0f, "%.0f px");
             break;
         case MarkerStyle::SilhouetteGlow:
             ImGui::SliderFloat("Width", &c.glow_width, 0.4f, 2.0f, "%.2f");
@@ -95,7 +111,20 @@ void draw_options(Config& c) {
             ImGui::SliderFloat("Beam height (m)", &c.beam_height, 0.5f, 6.0f, "%.2f");
             ImGui::SliderFloat("Beam width", &c.beam_width, 2.0f, 40.0f, "%.0f px");
             break;
+        default: break;
     }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Behavior");
+    ImGui::Checkbox("Fade when zoomed in", &c.fade_enabled);
+    if (c.fade_enabled) {
+        ImGui::SliderFloat("Fade near (m)", &c.fade_near, 0.5f, 30.0f, "%.1f");
+        ImGui::SliderFloat("Fade far (m)", &c.fade_far, 1.0f, 60.0f, "%.1f");
+        if (c.fade_far < c.fade_near + 0.5f) c.fade_far = c.fade_near + 0.5f;
+    }
+    ImGui::Checkbox("Off-screen arrow", &c.offscreen_arrow);
+    if (c.offscreen_arrow)
+        ImGui::SliderFloat("Arrow size", &c.arrow_size, 8.0f, 48.0f, "%.0f px");
 }
 
 }
