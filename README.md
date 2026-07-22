@@ -1,5 +1,7 @@
 # arcdps-player-outline
 
+[![build-release](https://github.com/darkharasho/arcdps-player-outline/actions/workflows/release.yml/badge.svg)](https://github.com/darkharasho/arcdps-player-outline/actions/workflows/release.yml)
+
 An [arcdps](https://www.deltaconnected.com/arcdps/) plugin for **Guild Wars 2** that draws a persistent, always-on-top marker on **your own character** — so you can instantly find yourself in a crowded zerg. It reads your position from **MumbleLink** and projects it to screen space, tracking smoothly at any camera angle.
 
 It marks *only you*. It does **not** outline other players/NPCs and does **not** show distance to the commander tag (see [Scope & limitations](#scope--limitations)).

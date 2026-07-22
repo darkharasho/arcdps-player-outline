@@ -1,0 +1,51 @@
+name: build-release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # manual run: builds + uploads the DLL as an artifact (no release)
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (MinGW-w64 + cmake)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mingw-w64 cmake
+
+      - name: Native unit tests
+        run: |
+          cmake -S . -B build-native
+          cmake --build build-native --parallel
+          ./build-native/core_tests
+
+      - name: Cross-compile Windows DLL
+        run: |
+          cmake -S . -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake
+          cmake --build build-win --parallel
+
+      - name: Verify export + checksum
+        run: |
+          x86_64-w64-mingw32-objdump -p build-win/arcdps_player_outline.dll | grep -qi get_init_addr
+          (cd build-win && sha256sum arcdps_player_outline.dll | tee arcdps_player_outline.dll.sha256)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arcdps_player_outline
+          path: |
+            build-win/arcdps_player_outline.dll
+            build-win/arcdps_player_outline.dll.sha256
+
+      - name: Attach to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build-win/arcdps_player_outline.dll
+            build-win/arcdps_player_outline.dll.sha256
+          fail_on_unmatched_files: true
