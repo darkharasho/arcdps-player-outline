@@ -44,3 +44,14 @@ TEST_CASE("point behind camera is flagged behind") {
     ScreenPoint s = world_to_screen({0,0,-10}, cam, 1920, 1080);
     CHECK(s.behind);
 }
+TEST_CASE("clamp pulls an off-screen point onto the inset rect") {
+    EdgePoint e = clamp_to_edge(3000, 540, 1920, 1080, 40);
+    CHECK(e.x == doctest::Approx(1880).epsilon(0.02));   // 1920-40
+    CHECK(e.y <= 1040.0f);
+    CHECK(e.y >= 40.0f);
+}
+TEST_CASE("clamp leaves on-screen points essentially in place") {
+    EdgePoint e = clamp_to_edge(960, 540, 1920, 1080, 40);
+    CHECK(e.x == doctest::Approx(960).epsilon(0.02));
+    CHECK(e.y == doctest::Approx(540).epsilon(0.02));
+}

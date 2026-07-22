@@ -49,4 +49,19 @@ ScreenPoint world_to_screen(Vec3 world, const CameraState& cam,
     sp.on_screen = (ndcx>=-1 && ndcx<=1 && ndcy>=-1 && ndcy<=1);
     return sp;
 }
+
+EdgePoint clamp_to_edge(float sx, float sy, float w, float h, float margin) {
+    float cx = w*0.5f, cy = h*0.5f;
+    float dx = sx - cx, dy = sy - cy;
+    EdgePoint e; e.angle_rad = std::atan2(dy, dx);
+    float minx=margin, maxx=w-margin, miny=margin, maxy=h-margin;
+    if (sx>=minx && sx<=maxx && sy>=miny && sy<=maxy) { e.x=sx; e.y=sy; return e; }
+    if (dx==0 && dy==0) { e.x=cx; e.y=cy; return e; }
+    // scale the direction so it hits the nearest inset edge
+    float tx = dx>0 ? (maxx-cx)/dx : (dx<0 ? (minx-cx)/dx : 1e30f);
+    float ty = dy>0 ? (maxy-cy)/dy : (dy<0 ? (miny-cy)/dy : 1e30f);
+    float t = tx<ty ? tx : ty;
+    e.x = cx + dx*t; e.y = cy + dy*t;
+    return e;
+}
 }

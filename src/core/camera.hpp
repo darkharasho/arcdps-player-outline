@@ -8,4 +8,6 @@ Mat4 perspective(float fov_y, float aspect, float znear, float zfar);
 struct ScreenPoint { float x{}, y{}; bool on_screen{false}; bool behind{false}; };
 ScreenPoint world_to_screen(Vec3 world, const CameraState& cam,
                             float screen_w, float screen_h);
+struct EdgePoint { float x{}, y{}, angle_rad{}; };
+EdgePoint clamp_to_edge(float sx, float sy, float w, float h, float margin);
 }
