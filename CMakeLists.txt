@@ -20,7 +20,9 @@ else()
         tests/core/doctest_main.cpp
         tests/core/test_vec3.cpp
         tests/core/test_mumble_parse.cpp
-        src/core/mumble_data.cpp)
+        tests/core/test_camera.cpp
+        src/core/mumble_data.cpp
+        src/core/camera.cpp)
     target_include_directories(core_tests PRIVATE
         third_party/doctest src/core)
     enable_testing()
