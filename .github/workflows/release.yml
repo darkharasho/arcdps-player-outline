@@ -51,3 +51,4 @@ jobs:
             build-win/arcdps_player_outline.dll
             build-win/arcdps_player_outline.dll.sha256
           fail_on_unmatched_files: true
+          generate_release_notes: true
