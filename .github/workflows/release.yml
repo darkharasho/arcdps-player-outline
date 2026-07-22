@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need tags so `git describe` bakes the right version
 
       - name: Install toolchain (MinGW-w64 + cmake)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mingw-w64 cmake

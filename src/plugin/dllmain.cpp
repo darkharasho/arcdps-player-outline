@@ -10,9 +10,13 @@
 #include "one_euro.hpp"
 #include "config.hpp"
 
+#ifndef PLUGIN_VERSION
+#define PLUGIN_VERSION "0.0.0-dev"
+#endif
+
 static arcdps_exports g_arc{};
 static const char* kName  = "player_outline";
-static const char* kBuild = "0.1.0";
+static const char* kBuild = PLUGIN_VERSION;   // injected from the git tag at build time
 static plugin::MumbleReader g_reader;
 static plugin::Config g_cfg;
 static core::OneEuro g_fx, g_fy, g_fh;   // smooth anchor x/y and body height (px)
