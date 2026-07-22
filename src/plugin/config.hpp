@@ -16,6 +16,11 @@ struct Config {
     float       color[3] = {0.16f, 0.92f, 0.78f};   // teal
     float       opacity  = 0.90f;                   // 0..1
 
+    // Outline (contrasting border around drawn elements)
+    bool        outline = true;
+    float       outline_color[3] = {1.0f, 1.0f, 1.0f};  // white
+    float       outline_width = 2.0f;                   // px
+
     // Ground ring / Ring + pip
     float ring_radius = 0.6f;    // world radius in meters
 

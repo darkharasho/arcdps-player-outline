@@ -12,6 +12,9 @@ void save_config(const Config& c, const char* path) {
     std::fprintf(f, "style=%d\n", (int)c.style);
     std::fprintf(f, "r=%.4f\ng=%.4f\nb=%.4f\n", c.color[0], c.color[1], c.color[2]);
     std::fprintf(f, "opacity=%.4f\n", c.opacity);
+    std::fprintf(f, "outline=%d\noc_r=%.4f\noc_g=%.4f\noc_b=%.4f\noutline_width=%.4f\n",
+                 c.outline ? 1 : 0, c.outline_color[0], c.outline_color[1],
+                 c.outline_color[2], c.outline_width);
     std::fprintf(f, "ring_radius=%.4f\n", c.ring_radius);
     std::fprintf(f, "glow_width=%.4f\nglow_amount=%.4f\nchar_height=%.4f\n",
                  c.glow_width, c.glow_amount, c.char_height);
@@ -33,7 +36,9 @@ static float clampf(float v, float lo, float hi) {
 static void sanitize(Config& c) {
     if ((int)c.style < 0 || (int)c.style > 5) c.style = MarkerStyle::GroundRing;
     for (int i = 0; i < 3; ++i) c.color[i] = clampf(c.color[i], 0.0f, 1.0f);
-    c.opacity      = clampf(c.opacity, 0.05f, 1.0f);
+    for (int i = 0; i < 3; ++i) c.outline_color[i] = clampf(c.outline_color[i], 0.0f, 1.0f);
+    c.opacity       = clampf(c.opacity, 0.05f, 1.0f);
+    c.outline_width = clampf(c.outline_width, 0.5f, 8.0f);
     c.ring_radius  = clampf(c.ring_radius, 0.2f, 2.5f);
     c.glow_width   = clampf(c.glow_width, 0.4f, 2.0f);
     c.glow_amount  = clampf(c.glow_amount, 0.0f, 2.0f);
@@ -60,6 +65,11 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "g"))            c.color[1] = v;
         else if (!std::strcmp(key, "b"))            c.color[2] = v;
         else if (!std::strcmp(key, "opacity"))      c.opacity = v;
+        else if (!std::strcmp(key, "outline"))      c.outline = (v != 0);
+        else if (!std::strcmp(key, "oc_r"))         c.outline_color[0] = v;
+        else if (!std::strcmp(key, "oc_g"))         c.outline_color[1] = v;
+        else if (!std::strcmp(key, "oc_b"))         c.outline_color[2] = v;
+        else if (!std::strcmp(key, "outline_width")) c.outline_width = v;
         else if (!std::strcmp(key, "ring_radius"))  c.ring_radius = v;
         else if (!std::strcmp(key, "glow_width"))   c.glow_width = v;
         else if (!std::strcmp(key, "glow_amount"))  c.glow_amount = v;
@@ -88,6 +98,11 @@ void draw_options(Config& c) {
 
     ImGui::ColorEdit3("Color", c.color);
     ImGui::SliderFloat("Opacity", &c.opacity, 0.05f, 1.0f, "%.2f");
+    ImGui::Checkbox("Outline", &c.outline);
+    if (c.outline) {
+        ImGui::ColorEdit3("Outline color", c.outline_color);
+        ImGui::SliderFloat("Outline width", &c.outline_width, 0.5f, 8.0f, "%.1f px");
+    }
 
     ImGui::Separator();
     switch (c.style) {

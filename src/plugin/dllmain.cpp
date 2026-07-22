@@ -71,6 +71,13 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     }
     unsigned rgba = faded_rgba(fade_mul);
 
+    plugin::Outline ol;
+    if (g_cfg.outline && g_cfg.outline_width > 0.0f) {
+        ol.rgba = IM_COL32((int)(g_cfg.outline_color[0] * 255), (int)(g_cfg.outline_color[1] * 255),
+                           (int)(g_cfg.outline_color[2] * 255), (int)(g_cfg.opacity * fade_mul * 255));
+        ol.width = g_cfg.outline_width;
+    }
+
     core::ScreenPoint feet = core::world_to_screen(avatar.position, cam, sz.x, sz.y);
 
     // Off-screen (behind or past the edge): draw an edge arrow toward the player.
@@ -87,7 +94,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
             float reach = sz.x > sz.y ? sz.x : sz.y;
             core::EdgePoint e = core::clamp_to_edge(cxs + dx * reach, cys + dy * reach,
                                                     sz.x, sz.y, g_cfg.arrow_size + 14.0f);
-            plugin::draw_arrow(e.x, e.y, e.angle_rad, g_cfg.arrow_size, rgba);
+            plugin::draw_arrow(e.x, e.y, e.angle_rad, g_cfg.arrow_size, rgba, ol);
         }
         return 0;
     }
@@ -112,17 +119,17 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
             const int N = 40;
             ImVec2 pts[N];
             if (build_ground_ring(avatar, cam, pts, N, g_cfg.ring_radius, sz.x, sz.y, ox, oy)) {
-                plugin::draw_ground_ring(pts, N, rgba, 2.5f);
+                plugin::draw_ground_ring(pts, N, rgba, 2.5f, ol);
                 if (g_cfg.style == plugin::MarkerStyle::RingPip) {
                     core::ScreenPoint hp = core::world_to_screen(
                         avatar.position + core::Vec3{0.0f, 1.2f, 0.0f}, cam, sz.x, sz.y);
-                    if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba);
+                    if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba, ol);
                 } else if (g_cfg.style == plugin::MarkerStyle::RingChevron) {
                     core::ScreenPoint hp = core::world_to_screen(
                         avatar.position + core::Vec3{0.0f, 2.4f, 0.0f}, cam, sz.x, sz.y);
                     float hx = hp.behind ? sx : hp.x + ox;
                     float hy = hp.behind ? (sy - 60.0f) : hp.y + oy;
-                    plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba);
+                    plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba, ol);
                 }
             }
             break;
@@ -142,18 +149,18 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
             float width_px = full_px * 0.40f * g_cfg.glow_width;
             float sh = g_fh.filter(body_px, dt);
             plugin::draw_silhouette_glow(sx, sy - sh * 0.5f, sh, width_px,
-                                         rgba, g_cfg.glow_amount);
+                                         rgba, g_cfg.glow_amount, ol);
             break;
         }
         case plugin::MarkerStyle::Chevron: {
-            plugin::draw_chevron(sx, sy, g_cfg.chevron_size, rgba);
+            plugin::draw_chevron(sx, sy, g_cfg.chevron_size, rgba, ol);
             break;
         }
         case plugin::MarkerStyle::Beam: {
             core::ScreenPoint top = core::world_to_screen(
                 avatar.position + core::Vec3{0.0f, g_cfg.beam_height, 0.0f}, cam, sz.x, sz.y);
             float top_y = top.behind ? (sy - 200.0f) : (top.y + oy);
-            plugin::draw_beam(sx, sy, top_y, g_cfg.beam_width, rgba);
+            plugin::draw_beam(sx, sy, top_y, g_cfg.beam_width, rgba, ol);
             break;
         }
     }
