@@ -51,11 +51,15 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
 
     switch (g_cfg.style) {
         case plugin::MarkerStyle::SilhouetteGlow: {
-            // Project a head point kCharHeight above feet; pixel gap = on-screen
-            // height so the aura scales with distance.
-            core::Vec3 head_world = avatar.position + core::Vec3{0.0f, g_cfg.char_height, 0.0f};
-            core::ScreenPoint head = core::world_to_screen(head_world, cam, sz.x, sz.y);
-            float body_px = std::fabs(feet.y - head.y);
+            // Size by WORLD distance, not the projected feet->head gap. The gap
+            // foreshortens (collapses when the camera pitches down); distance
+            // gives a stable on-screen height that only shrinks as you truly move
+            // away. focal = perpendicular pixels per world unit at unit distance.
+            float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
+            float dist  = core::length(cam.position - avatar.position);
+            if (dist < 0.5f) dist = 0.5f;
+            float body_px = focal * g_cfg.char_height / dist;
+            if (body_px < 22.0f) body_px = 22.0f;   // stay readable when far
             float sx = g_fx.filter(feet.x, dt);
             float sy = g_fy.filter(feet.y, dt);
             float sh = g_fh.filter(body_px, dt);
