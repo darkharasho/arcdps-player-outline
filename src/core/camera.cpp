@@ -35,7 +35,7 @@ static void mul(const Mat4& A, const Mat4& B, Mat4& out) { // out = A*B (col-maj
 
 ScreenPoint world_to_screen(Vec3 world, const CameraState& cam,
                             float screen_w, float screen_h) {
-    Mat4 V = look_at(cam.position, cam.front, {0,1,0});
+    Mat4 V = look_at(cam.position, cam.front, cam.up);
     Mat4 P = perspective(cam.fov_y, screen_w/screen_h, 0.05f, 10000.0f);
     Mat4 VP; mul(P, V, VP);
     float cx = VP.m[0]*world.x + VP.m[4]*world.y + VP.m[8]*world.z  + VP.m[12];

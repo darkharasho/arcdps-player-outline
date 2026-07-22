@@ -21,7 +21,7 @@ struct LinkedMem {
 };
 
 struct AvatarState { Vec3 position{}; bool valid{false}; };
-struct CameraState { Vec3 position{}; Vec3 front{}; float fov_y{1.222f}; };
+struct CameraState { Vec3 position{}; Vec3 front{}; Vec3 up{0.0f, 1.0f, 0.0f}; float fov_y{1.222f}; };
 
 float parse_identity_fov(const char* utf8_identity, float fallback);
 AvatarState read_avatar(const LinkedMem& m);

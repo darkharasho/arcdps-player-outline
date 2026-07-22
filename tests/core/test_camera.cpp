@@ -39,6 +39,22 @@ TEST_CASE("point to the right lands in right half") {
     CHECK_FALSE(s.behind);
     CHECK(s.x > 960.0f);
 }
+TEST_CASE("overhead camera (looking straight down) does not degenerate") {
+    // World-up would be parallel to the view dir here and gimbal-lock look_at;
+    // the camera's own up (perpendicular) must keep the projection finite.
+    core::CameraState cam;
+    cam.position = {0, 10, 0};
+    cam.front = {0, -1, 0};      // straight down
+    cam.up = {0, 0, 1};          // valid perpendicular up (as GW2 provides)
+    cam.fov_y = 1.0f;
+    core::ScreenPoint s = core::world_to_screen({0, 0, 0}, cam, 1920, 1080);
+    CHECK_FALSE(s.behind);
+    CHECK(s.x == s.x);           // not NaN
+    CHECK(s.y == s.y);
+    CHECK(s.x == doctest::Approx(960).epsilon(0.05));
+    CHECK(s.y == doctest::Approx(540).epsilon(0.05));
+}
+
 TEST_CASE("point behind camera is flagged behind") {
     CameraState cam; cam.position={0,0,0}; cam.front={0,0,1}; cam.fov_y=1.0f;
     ScreenPoint s = world_to_screen({0,0,-10}, cam, 1920, 1080);
