@@ -1,13 +1,6 @@
 #include "marker.hpp"
-#include "imgui.h"
-namespace plugin {
 
-void draw_ground_ring(const core::ScreenPoint& feet, float radius_px, unsigned rgba) {
-    if (feet.behind) return;
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    dl->AddCircle(ImVec2(feet.x, feet.y), radius_px, rgba, 48, 3.0f);
-    dl->AddCircleFilled(ImVec2(feet.x, feet.y), 3.0f, rgba, 12);
-}
+namespace plugin {
 
 static unsigned with_alpha(unsigned rgba, float mul) {
     int r = rgba & 0xFF, g = (rgba >> 8) & 0xFF, b = (rgba >> 16) & 0xFF, a = (rgba >> 24) & 0xFF;
@@ -16,52 +9,64 @@ static unsigned with_alpha(unsigned rgba, float mul) {
     return IM_COL32(r, g, b, na);
 }
 
+void draw_ground_ring(const ImVec2* pts, int n, unsigned rgba, float thickness) {
+    if (n < 3) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->AddConvexPolyFilled(pts, n, with_alpha(rgba, 0.08f));           // faint disc
+    dl->AddPolyline(pts, n, with_alpha(rgba, 0.22f), ImDrawFlags_Closed, thickness + 4.0f); // glow
+    dl->AddPolyline(pts, n, with_alpha(rgba, 1.0f),  ImDrawFlags_Closed, thickness);        // crisp rim
+}
+
 void draw_silhouette_glow(float cx, float cy, float body_px, unsigned rgba,
                           float width_scale, float glow) {
     if (body_px < 6.0f) body_px = 6.0f;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-
-    float w      = body_px * 0.42f * width_scale;   // capsule width
+    float w = body_px * 0.40f * width_scale;
     float half_w = w * 0.5f;
     float half_h = body_px * 0.5f;
-    float top    = cy - half_h, bot = cy + half_h;
+    float top = cy - half_h, bot = cy + half_h;
 
-    // Soft outer glow: a few progressively larger, fainter rounded capsules.
-    const int layers = 4;
-    for (int i = layers; i >= 1; --i) {
-        float pad = i * (body_px * 0.05f + 3.0f);
-        float rr  = half_w + pad;
+    for (int i = 3; i >= 1; --i) {                     // soft, restrained glow
+        float pad = i * (body_px * 0.035f + 2.5f);
         dl->AddRectFilled(ImVec2(cx - half_w - pad, top - pad),
                           ImVec2(cx + half_w + pad, bot + pad),
-                          with_alpha(rgba, 0.06f * glow), rr);
+                          with_alpha(rgba, 0.045f * glow), half_w + pad);
     }
-    // Aura fill.
     dl->AddRectFilled(ImVec2(cx - half_w, top), ImVec2(cx + half_w, bot),
-                      with_alpha(rgba, 0.24f), half_w);
-    // Bright rim so the shape stays crisp against busy backgrounds.
+                      with_alpha(rgba, 0.13f), half_w);
     dl->AddRect(ImVec2(cx - half_w, top), ImVec2(cx + half_w, bot),
-                with_alpha(rgba, 1.0f), half_w, 0, 2.5f);
+                with_alpha(rgba, 0.9f), half_w, 0, 2.0f);
 }
 
 void draw_chevron(float cx, float cy, float size_px, unsigned rgba) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    float half = size_px * 0.5f;
-    ImVec2 tip(cx, cy + half);            // points down at the character
-    ImVec2 l(cx - half, cy - half);
-    ImVec2 r(cx + half, cy - half);
-    // soft drop-shadow/glow underlay
-    dl->AddTriangleFilled(ImVec2(tip.x, tip.y + 2), ImVec2(l.x - 2, l.y - 2),
-                          ImVec2(r.x + 2, r.y - 2), with_alpha(rgba, 0.25f));
-    dl->AddTriangleFilled(tip, l, r, with_alpha(rgba, 1.0f));
+    float w = size_px * 0.6f, h = size_px * 0.5f;
+    float th = size_px * 0.18f; if (th < 3.0f) th = 3.0f;
+    ImVec2 v[3] = { ImVec2(cx - w, cy - h), ImVec2(cx, cy + h), ImVec2(cx + w, cy - h) };
+    dl->AddPolyline(v, 3, with_alpha(rgba, 0.22f), 0, th + 4.0f);   // soft glow
+    dl->AddPolyline(v, 3, with_alpha(rgba, 1.0f),  0, th);          // crisp V
 }
 
-void draw_rally_marker(float cx, float cy, float size_px, unsigned rgba) {
+void draw_beam(float cx, float base_y, float top_y, float width_px, unsigned rgba) {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    float h = size_px * 0.5f;
-    ImVec2 pts[4] = { {cx, cy - h}, {cx + h, cy}, {cx, cy + h}, {cx - h, cy} };
-    dl->AddConvexPolyFilled(pts, 4, with_alpha(rgba, 0.30f));
-    dl->AddPolyline(pts, 4, with_alpha(rgba, 1.0f), ImDrawFlags_Closed, 2.0f);
-    dl->AddCircleFilled(ImVec2(cx, cy), 2.5f, with_alpha(rgba, 1.0f), 10);
+    float hw = width_px * 0.5f;
+    unsigned clear  = with_alpha(rgba, 0.0f);
+    unsigned body   = with_alpha(rgba, 0.45f);
+    unsigned core   = with_alpha(rgba, 0.9f);
+    // outer column: fades to transparent toward the top
+    dl->AddRectFilledMultiColor(ImVec2(cx - hw, top_y), ImVec2(cx + hw, base_y),
+                                clear, clear, body, body);
+    // bright inner core
+    dl->AddRectFilledMultiColor(ImVec2(cx - hw * 0.30f, top_y), ImVec2(cx + hw * 0.30f, base_y),
+                                clear, clear, core, core);
+    // grounding disc at the feet
+    dl->AddCircleFilled(ImVec2(cx, base_y), hw * 0.85f, with_alpha(rgba, 0.65f), 24);
+}
+
+void draw_pip(float cx, float cy, float r_px, unsigned rgba) {
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->AddCircleFilled(ImVec2(cx, cy), r_px * 2.0f, with_alpha(rgba, 0.18f), 20);  // halo
+    dl->AddCircleFilled(ImVec2(cx, cy), r_px, with_alpha(rgba, 1.0f), 16);
 }
 
 }
