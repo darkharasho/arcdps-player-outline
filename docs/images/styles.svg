@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="330" viewBox="0 0 900 330" font-family="Segoe UI, system-ui, sans-serif">
+  <defs>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#25f5c8" stop-opacity="0"/>
+      <stop offset="1" stop-color="#25f5c8" stop-opacity="0.55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#25f5c8" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#25f5c8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="900" height="330" rx="14" fill="#0a0f1a"/>
+  <text x="24" y="34" fill="#e7eef8" font-size="18" font-weight="700">arcdps-player-outline — marker styles</text>
+
+  <g transform="translate(24,52)">
+    <rect width="270" height="120" rx="12" fill="#0e1626" stroke="#233149"/>
+    <ellipse cx="135" cy="78" rx="46" ry="17" stroke="#25f5c8" fill="none" stroke-width="3"/>
+    <ellipse cx="135" cy="78" rx="46" ry="17" stroke="#ffffff" fill="none" stroke-width="1.2" opacity=".9"/>
+    <rect x="127" y="34" width="16" height="42" rx="8" fill="#5b6f92"/>
+    <text x="12" y="112" fill="#cfe0f5" font-size="14" font-weight="600">Ground ring · default</text>
+  </g>
+  <g transform="translate(315,52)">
+    <rect width="270" height="120" rx="12" fill="#0e1626" stroke="#233149"/>
+    <ellipse cx="135" cy="60" rx="52" ry="46" fill="url(#glow)"/>
+    <rect x="120" y="26" width="30" height="64" rx="15" stroke="#25f5c8" fill="none" stroke-width="3"/>
+    <rect x="127" y="34" width="16" height="48" rx="8" fill="#5b6f92"/>
+    <text x="12" y="112" fill="#cfe0f5" font-size="14" font-weight="600">Silhouette glow · adaptive</text>
+  </g>
+  <g transform="translate(606,52)">
+    <rect width="270" height="120" rx="12" fill="#0e1626" stroke="#233149"/>
+    <polyline points="115,30 135,52 155,30" stroke="#25f5c8" fill="none" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+    <rect x="127" y="56" width="16" height="42" rx="8" fill="#5b6f92"/>
+    <text x="12" y="112" fill="#cfe0f5" font-size="14" font-weight="600">Chevron · overhead</text>
+  </g>
+
+  <g transform="translate(24,184)">
+    <rect width="270" height="120" rx="12" fill="#0e1626" stroke="#233149"/>
+    <rect x="127" y="18" width="16" height="72" fill="url(#beam)"/>
+    <ellipse cx="135" cy="90" rx="16" ry="6" fill="#25f5c8" opacity=".7"/>
+    <rect x="127" y="60" width="16" height="34" rx="8" fill="#5b6f92"/>
+    <text x="12" y="112" fill="#cfe0f5" font-size="14" font-weight="600">Beam · light pillar</text>
+  </g>
+  <g transform="translate(315,184)">
+    <rect width="270" height="120" rx="12" fill="#0e1626" stroke="#233149"/>
+    <ellipse cx="135" cy="86" rx="44" ry="16" stroke="#25f5c8" fill="none" stroke-width="3"/>
+    <circle cx="135" cy="40" r="6" fill="#25f5c8"/>
+    <rect x="127" y="46" width="16" height="42" rx="8" fill="#5b6f92"/>
+    <text x="12" y="112" fill="#cfe0f5" font-size="14" font-weight="600">Ring + pip</text>
+  </g>
+  <g transform="translate(606,184)">
+    <rect width="270" height="120" rx="12" fill="#0e1626" stroke="#233149"/>
+    <ellipse cx="135" cy="86" rx="44" ry="16" stroke="#25f5c8" fill="none" stroke-width="3"/>
+    <polyline points="120,30 135,46 150,30" stroke="#25f5c8" fill="none" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    <rect x="127" y="48" width="16" height="40" rx="8" fill="#5b6f92"/>
+    <text x="12" y="112" fill="#cfe0f5" font-size="14" font-weight="600">Ring + chevron</text>
+  </g>
+</svg>
