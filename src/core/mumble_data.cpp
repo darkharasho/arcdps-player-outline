@@ -29,8 +29,11 @@ CameraState read_camera(const LinkedMem& m, float fov_y) {
     c.front    = normalized({ m.fCameraFront[0], m.fCameraFront[1], m.fCameraFront[2] });
     Vec3 up    = { m.fCameraTop[0], m.fCameraTop[1], m.fCameraTop[2] };
     // GW2's real camera up avoids look_at gimbal-lock when looking straight
-    // up/down; fall back to world-up only if the game didn't provide one.
-    c.up       = (up.x != 0 || up.y != 0 || up.z != 0) ? normalized(up) : Vec3{0.0f, 1.0f, 0.0f};
+    // up/down. If the game gives no up, pick a world axis NOT parallel to front
+    // (world-up would still gimbal-lock a straight-down camera).
+    if (up.x == 0 && up.y == 0 && up.z == 0)
+        up = (c.front.y * c.front.y > 0.98f) ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+    c.up       = normalized(up);
     c.fov_y    = fov_y;
     return c;
 }

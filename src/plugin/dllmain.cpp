@@ -22,12 +22,15 @@ static char g_ini[MAX_PATH] = {0};
 static void reset_smoothing() { g_fx.reset(); g_fy.reset(); g_fh.reset(); }
 
 static void resolve_ini_path() {
-    if (!GetModuleFileNameA(g_self, g_ini, MAX_PATH)) { g_ini[0] = 0; return; }
+    DWORD n = GetModuleFileNameA(g_self, g_ini, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) { g_ini[0] = 0; return; }   // truncated/failed
+    g_ini[n] = 0;                                            // guarantee terminated
     char* slash = std::strrchr(g_ini, '\\');
     if (!slash) slash = std::strrchr(g_ini, '/');
     char* tail = slash ? slash + 1 : g_ini;
     std::strncpy(tail, "arcdps_player_outline.ini",
                  (size_t)(g_ini + MAX_PATH - tail - 1));
+    g_ini[MAX_PATH - 1] = 0;
 }
 
 static unsigned faded_rgba(float mul) {

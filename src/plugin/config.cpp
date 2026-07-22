@@ -39,7 +39,9 @@ static void sanitize(Config& c) {
     for (int i = 0; i < 3; ++i) c.outline_color[i] = clampf(c.outline_color[i], 0.0f, 1.0f);
     c.opacity       = clampf(c.opacity, 0.05f, 1.0f);
     c.outline_width = clampf(c.outline_width, 0.5f, 8.0f);
-    c.ring_radius  = clampf(c.ring_radius, 0.2f, 2.5f);
+    // ring_radius changed units (px -> meters); a wildly out-of-range value is a
+    // stale pixel radius, so reset to default rather than clamp to the max.
+    if (c.ring_radius < 0.2f || c.ring_radius > 2.5f) c.ring_radius = 0.6f;
     c.glow_width   = clampf(c.glow_width, 0.4f, 2.0f);
     c.glow_amount  = clampf(c.glow_amount, 0.0f, 2.0f);
     c.char_height  = clampf(c.char_height, 0.8f, 3.2f);
@@ -58,7 +60,7 @@ void load_config(Config& c, const char* path) {
     if (!f) return;
     char key[32];
     float v;
-    while (std::fscanf(f, " %31[^=]=%f", key, &v) == 2) {
+    while (std::fscanf(f, " %31[^=\n]=%f", key, &v) == 2) {
         if      (!std::strcmp(key, "enabled"))      c.enabled = (v != 0);
         else if (!std::strcmp(key, "style"))        c.style = (MarkerStyle)(int)v;
         else if (!std::strcmp(key, "r"))            c.color[0] = v;
