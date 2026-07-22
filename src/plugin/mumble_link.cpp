@@ -4,6 +4,22 @@
 
 namespace plugin {
 
+MumbleReader::~MumbleReader() {
+    if (own_view_) UnmapViewOfFile((LPCVOID)own_view_);
+    if (own_handle_) CloseHandle((HANDLE)own_handle_);
+}
+
+void MumbleReader::ensure_link_object() {
+    if (own_handle_) return;
+    HANDLE h = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                  0, sizeof(core::LinkedMem), L"MumbleLink");
+    if (!h) return;
+    // Hold a view so the section stays alive for GW2 to write into. We never
+    // read this pointer directly; sample() locates the live block by scanning.
+    own_view_ = MapViewOfFile(h, FILE_MAP_READ, 0, 0, sizeof(core::LinkedMem));
+    own_handle_ = h;
+}
+
 // A region holds the live MumbleLink block if it parses as version 2, is
 // actively ticking, and its identity looks like the JSON GW2 writes.
 static bool looks_like_mumble(const core::LinkedMem* m) {

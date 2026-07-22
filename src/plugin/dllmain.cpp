@@ -196,6 +196,9 @@ void* get_init_addr(char* /*arcversion*/, void* imguictx, void* /*id3dptr*/,
     ImGui::SetCurrentContext((ImGuiContext*)imguictx);
     ImGui::SetAllocatorFunctions(
         (void*(*)(size_t,void*))mallocfn, (void(*)(void*,void*))freefn);
+    // Ensure the named MumbleLink section exists early (native Windows needs a
+    // consumer to create it before GW2 will write); harmless under Proton.
+    g_reader.ensure_link_object();
     return (void*)mod_init;
 }
 
