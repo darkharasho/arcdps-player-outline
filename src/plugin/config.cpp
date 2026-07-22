@@ -16,6 +16,9 @@ void save_config(const Config& c, const char* path) {
                  c.glow_width, c.glow_amount, c.char_height);
     std::fprintf(f, "ring_radius=%.4f\n", c.ring_radius);
     std::fprintf(f, "chevron_size=%.4f\nhead_offset=%.4f\n", c.chevron_size, c.head_offset);
+    std::fprintf(f, "rally_show=%d\nrally_tint=%d\nrally_key=%d\n",
+                 c.rally_show ? 1 : 0, c.rally_tint ? 1 : 0, c.rally_key);
+    std::fprintf(f, "rally_near=%.4f\nrally_far=%.4f\n", c.rally_near, c.rally_far);
     std::fclose(f);
 }
 
@@ -37,6 +40,11 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "ring_radius"))  c.ring_radius = v;
         else if (!std::strcmp(key, "chevron_size")) c.chevron_size = v;
         else if (!std::strcmp(key, "head_offset"))  c.head_offset = v;
+        else if (!std::strcmp(key, "rally_show"))   c.rally_show = (v != 0);
+        else if (!std::strcmp(key, "rally_tint"))   c.rally_tint = (v != 0);
+        else if (!std::strcmp(key, "rally_key"))    c.rally_key = (int)v;
+        else if (!std::strcmp(key, "rally_near"))   c.rally_near = v;
+        else if (!std::strcmp(key, "rally_far"))    c.rally_far = v;
     }
     std::fclose(f);
 }
@@ -66,6 +74,14 @@ void draw_options(Config& c) {
             ImGui::SliderFloat("Height above (m)", &c.head_offset, 0.0f, 3.5f, "%.2f");
             break;
     }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Rally point");
+    ImGui::Checkbox("Show rally point + distance", &c.rally_show);
+    ImGui::Checkbox("Tint marker by distance", &c.rally_tint);
+    ImGui::SliderFloat("Near (green) m", &c.rally_near, 1.0f, 80.0f, "%.0f");
+    ImGui::SliderFloat("Far (red) m", &c.rally_far, 5.0f, 200.0f, "%.0f");
+    if (c.rally_far < c.rally_near + 1.0f) c.rally_far = c.rally_near + 1.0f;
 }
 
 }

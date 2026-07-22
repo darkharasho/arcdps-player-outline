@@ -20,6 +20,13 @@ struct Config {
     // Chevron
     float chevron_size = 26.0f;  // px
     float head_offset  = 2.2f;   // meters above feet
+
+    // Rally point (a reference position you drop with a hotkey)
+    bool  rally_show   = true;         // draw the rally point + distance readout
+    bool  rally_tint   = true;         // tint the self marker by distance to rally
+    int   rally_key    = 0x75;         // VK code, default F6
+    float rally_near   = 15.0f;        // meters: at/under -> "with group" color
+    float rally_far    = 60.0f;        // meters: at/over  -> "far" color
 };
 
 void load_config(Config& c, const char* path);

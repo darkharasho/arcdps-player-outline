@@ -55,4 +55,13 @@ void draw_chevron(float cx, float cy, float size_px, unsigned rgba) {
     dl->AddTriangleFilled(tip, l, r, with_alpha(rgba, 1.0f));
 }
 
+void draw_rally_marker(float cx, float cy, float size_px, unsigned rgba) {
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    float h = size_px * 0.5f;
+    ImVec2 pts[4] = { {cx, cy - h}, {cx + h, cy}, {cx, cy + h}, {cx - h, cy} };
+    dl->AddConvexPolyFilled(pts, 4, with_alpha(rgba, 0.30f));
+    dl->AddPolyline(pts, 4, with_alpha(rgba, 1.0f), ImDrawFlags_Closed, 2.0f);
+    dl->AddCircleFilled(ImVec2(cx, cy), 2.5f, with_alpha(rgba, 1.0f), 10);
+}
+
 }

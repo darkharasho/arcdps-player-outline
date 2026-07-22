@@ -13,4 +13,7 @@ void draw_silhouette_glow(float cx, float cy, float body_px, unsigned rgba,
 // Downward-pointing chevron centered at (cx, cy), tip below, drawn above head.
 void draw_chevron(float cx, float cy, float size_px, unsigned rgba);
 
+// Small diamond marking a dropped rally point at (cx, cy).
+void draw_rally_marker(float cx, float cy, float size_px, unsigned rgba);
+
 }
