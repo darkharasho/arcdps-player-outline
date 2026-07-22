@@ -18,7 +18,9 @@ else()
     # ---- Native core test target ----
     add_executable(core_tests
         tests/core/doctest_main.cpp
-        tests/core/test_vec3.cpp)
+        tests/core/test_vec3.cpp
+        tests/core/test_mumble_parse.cpp
+        src/core/mumble_data.cpp)
     target_include_directories(core_tests PRIVATE
         third_party/doctest src/core)
     enable_testing()
