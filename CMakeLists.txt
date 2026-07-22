@@ -25,6 +25,7 @@ else()
         tests/core/test_vec3.cpp
         tests/core/test_mumble_parse.cpp
         tests/core/test_camera.cpp
+        tests/core/test_one_euro.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp)
     target_include_directories(core_tests PRIVATE
