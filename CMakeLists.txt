@@ -7,6 +7,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     file(GLOB IMGUI_SRC third_party/imgui/*.cpp)
     add_library(arcdps_player_outline SHARED
         src/plugin/dllmain.cpp
+        src/plugin/mumble_link.cpp
+        src/core/mumble_data.cpp
+        src/core/camera.cpp
         ${IMGUI_SRC})
     set_target_properties(arcdps_player_outline PROPERTIES
         PREFIX "" OUTPUT_NAME "arcdps_player_outline")
