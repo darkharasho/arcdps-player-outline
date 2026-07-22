@@ -90,11 +90,19 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
             float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
             float dist  = core::length(cam.position - avatar.position);
             if (dist < 0.5f) dist = 0.5f;
-            float body_px = focal * g_cfg.char_height / dist;
-            if (body_px < 22.0f) body_px = 22.0f;
+            float full_px = focal * g_cfg.char_height / dist;   // side-on height
+            if (full_px < 22.0f) full_px = 22.0f;
+            // Collapse height as the camera looks down: front.y ~0 side-on, ~1
+            // overhead. Width stays constant, so the capsule flattens to a disc.
+            float side = 1.0f - std::fabs(cam.front.y);
+            if (side < 0.0f) side = 0.0f; if (side > 1.0f) side = 1.0f;
+            float body_px = full_px * side;
+            float min_h = full_px * 0.22f;                      // never fully vanish
+            if (body_px < min_h) body_px = min_h;
+            float width_px = full_px * 0.40f * g_cfg.glow_width;
             float sh = g_fh.filter(body_px, dt);
-            plugin::draw_silhouette_glow(sx, sy - sh * 0.5f, sh, rgba,
-                                         g_cfg.glow_width, g_cfg.glow_amount);
+            plugin::draw_silhouette_glow(sx, sy - sh * 0.5f, sh, width_px,
+                                         rgba, g_cfg.glow_amount);
             break;
         }
         case plugin::MarkerStyle::Chevron: {

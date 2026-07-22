@@ -6,9 +6,11 @@ namespace plugin {
 // circle on the ground plane (circle overhead, ellipse from the side).
 void draw_ground_ring(const ImVec2* pts, int n, unsigned rgba, float thickness);
 
-// Soft aura hugging the character. (cx, cy) = body center; body_px = on-screen height.
-void draw_silhouette_glow(float cx, float cy, float body_px, unsigned rgba,
-                          float width_scale, float glow);
+// Soft aura hugging the character. (cx, cy) = center; body_px/width_px = the
+// capsule's on-screen height/width (independent, so it can flatten to a disc
+// when viewed overhead). glow = outer-glow strength.
+void draw_silhouette_glow(float cx, float cy, float body_px, float width_px,
+                          unsigned rgba, float glow);
 
 // Clean downward "V" chevron centered at (cx, cy), tip pointing down at the head.
 void draw_chevron(float cx, float cy, float size_px, unsigned rgba);

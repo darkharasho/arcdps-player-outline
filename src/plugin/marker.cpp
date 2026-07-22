@@ -17,25 +17,26 @@ void draw_ground_ring(const ImVec2* pts, int n, unsigned rgba, float thickness) 
     dl->AddPolyline(pts, n, with_alpha(rgba, 1.0f),  ImDrawFlags_Closed, thickness);        // crisp rim
 }
 
-void draw_silhouette_glow(float cx, float cy, float body_px, unsigned rgba,
-                          float width_scale, float glow) {
+void draw_silhouette_glow(float cx, float cy, float body_px, float width_px,
+                          unsigned rgba, float glow) {
     if (body_px < 6.0f) body_px = 6.0f;
+    if (width_px < 6.0f) width_px = 6.0f;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    float w = body_px * 0.40f * width_scale;
-    float half_w = w * 0.5f;
+    float half_w = width_px * 0.5f;
     float half_h = body_px * 0.5f;
     float top = cy - half_h, bot = cy + half_h;
+    float round = half_w < half_h ? half_w : half_h;   // capsule/ellipse ends
 
     for (int i = 3; i >= 1; --i) {                     // soft, restrained glow
         float pad = i * (body_px * 0.035f + 2.5f);
         dl->AddRectFilled(ImVec2(cx - half_w - pad, top - pad),
                           ImVec2(cx + half_w + pad, bot + pad),
-                          with_alpha(rgba, 0.045f * glow), half_w + pad);
+                          with_alpha(rgba, 0.045f * glow), round + pad);
     }
     dl->AddRectFilled(ImVec2(cx - half_w, top), ImVec2(cx + half_w, bot),
-                      with_alpha(rgba, 0.13f), half_w);
+                      with_alpha(rgba, 0.13f), round);
     dl->AddRect(ImVec2(cx - half_w, top), ImVec2(cx + half_w, bot),
-                with_alpha(rgba, 0.9f), half_w, 0, 2.0f);
+                with_alpha(rgba, 0.9f), round, 0, 2.0f);
 }
 
 void draw_chevron(float cx, float cy, float size_px, unsigned rgba) {
