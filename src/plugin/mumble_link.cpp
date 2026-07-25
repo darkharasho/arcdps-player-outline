@@ -85,6 +85,9 @@ bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam,
     cam = core::read_camera(lm, core::parse_identity_fov(utf8, 1.222f));
     session.mode = core::classify_map_type(core::read_map_type(lm));
     session.race = core::parse_identity_race(utf8);
+    uint32_t ui = core::read_ui_state(lm);
+    session.map_open = core::ui_map_open(ui);
+    session.focused  = core::ui_game_focused(ui);
     return true;
 }
 

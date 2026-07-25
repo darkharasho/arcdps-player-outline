@@ -22,6 +22,7 @@ It marks *only you*. It does **not** outline other players/NPCs and does **not**
 - **Fit height to race** — auto-sizes head-anchored styles to your character's race (so the chevron sits above a Norn's head, not their chest), with an editable per-race height table and a manual nudge.
 - **Distance fade** — eases the marker down when the camera is zoomed in close (solo), full when zoomed out (in a pile).
 - **Off-screen arrow** — a screen-edge arrow points to you when the camera is turned away.
+- **Auto-hide** — hides while the full-screen map is open or the game is alt-tabbed (both toggleable), and respects arcdps's own UI-hide key.
 - **Live config** — full options panel (color, opacity, per-style sliders) with settings saved to an ini next to the DLL.
 - **Cross-platform** — a native Windows DLL that also runs under **Proton/Wine** on Linux.
 

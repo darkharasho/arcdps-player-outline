@@ -41,6 +41,15 @@ uint32_t read_map_type(const LinkedMem& m) {
     return mt;
 }
 
+uint32_t read_ui_state(const LinkedMem& m) {
+    uint32_t s = 0;
+    std::memcpy(&s, m.context + 48, sizeof s);   // after mapId..buildId (6x uint32)
+    return s;
+}
+
+bool ui_map_open(uint32_t s)     { return (s & 0x1u) != 0; }   // IsMapOpen
+bool ui_game_focused(uint32_t s) { return (s & 0x8u) != 0; }   // GameHasFocus
+
 GameMode classify_map_type(uint32_t map_type) {
     switch (map_type) {
         case 9: case 10: case 11: case 12:

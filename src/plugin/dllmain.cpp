@@ -60,13 +60,21 @@ static bool build_ground_ring(const core::AvatarState& avatar, const core::Camer
     return true;
 }
 
-// called each frame by arcdps; not_charsel_or_loading==1 when safe to draw
-static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
-    if (!not_charsel_or_loading || !g_cfg.enabled) { reset_smoothing(); return 0; }
+// called each frame by arcdps; not_charsel_or_loading==1 when safe to draw,
+// hide==1 when arcdps has hidden its UI (its own hide key).
+static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
+    if (!not_charsel_or_loading || hide || !g_cfg.enabled) { reset_smoothing(); return 0; }
 
     core::AvatarState avatar; core::CameraState cam; plugin::SessionInfo session;
     if (!g_reader.sample(avatar, cam, session)) { reset_smoothing(); return 0; }
     g_race = session.race;   // cache for the options panel to highlight
+
+    // Hide over the full-screen map / when alt-tabbed, per the user's toggles.
+    if ((g_cfg.hide_when_map_open && session.map_open) ||
+        (g_cfg.hide_when_unfocused && !session.focused)) {
+        reset_smoothing();
+        return 0;
+    }
 
     // Per-mode gate: PvP is always off; PvE/WvW follow their toggles.
     bool mode_on = (session.mode == core::GameMode::WvW) ? g_cfg.show_in_wvw

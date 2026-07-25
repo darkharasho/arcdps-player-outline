@@ -32,6 +32,8 @@ void save_config(const Config& c, const char* path) {
                  c.fade_enabled ? 1 : 0, c.fade_near, c.fade_far);
     std::fprintf(f, "offscreen_arrow=%d\narrow_size=%.4f\n",
                  c.offscreen_arrow ? 1 : 0, c.arrow_size);
+    std::fprintf(f, "hide_when_map_open=%d\nhide_when_unfocused=%d\n",
+                 c.hide_when_map_open ? 1 : 0, c.hide_when_unfocused ? 1 : 0);
     std::fclose(f);
 }
 
@@ -104,6 +106,8 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "fade_far"))     c.fade_far = v;
         else if (!std::strcmp(key, "offscreen_arrow")) c.offscreen_arrow = (v != 0);
         else if (!std::strcmp(key, "arrow_size"))   c.arrow_size = v;
+        else if (!std::strcmp(key, "hide_when_map_open"))  c.hide_when_map_open = (v != 0);
+        else if (!std::strcmp(key, "hide_when_unfocused")) c.hide_when_unfocused = (v != 0);
     }
     std::fclose(f);
     sanitize(c);
@@ -196,6 +200,8 @@ void draw_options(Config& c, core::GameRace detected) {
     ImGui::Checkbox("Off-screen arrow", &c.offscreen_arrow);
     if (c.offscreen_arrow)
         ImGui::SliderFloat("Arrow size", &c.arrow_size, 8.0f, 48.0f, "%.0f px");
+    ImGui::Checkbox("Hide when map is open", &c.hide_when_map_open);
+    ImGui::Checkbox("Hide when game unfocused", &c.hide_when_unfocused);
 }
 
 }

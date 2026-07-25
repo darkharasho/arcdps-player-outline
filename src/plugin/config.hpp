@@ -52,6 +52,8 @@ struct Config {
     float fade_far     = 14.0f;  // meters: at/over  -> full opacity
     bool  offscreen_arrow = true;// edge arrow pointing to you when off-screen
     float arrow_size   = 18.0f;  // px
+    bool  hide_when_map_open  = true;  // hide while the full-screen map is open
+    bool  hide_when_unfocused = true;  // hide while GW2 is alt-tabbed / unfocused
 };
 
 // Fitted head height (meters, feet->top-of-head) for a race, incl. the nudge.

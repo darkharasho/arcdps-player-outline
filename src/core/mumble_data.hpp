@@ -40,4 +40,10 @@ CameraState read_camera(const LinkedMem& m, float fov_y);
 // byte offset 32 (after serverAddress[28] + uint32 mapId).
 uint32_t read_map_type(const LinkedMem& m);
 GameMode classify_map_type(uint32_t map_type);
+
+// uiState bitfield: uint32 at context offset 48 (after mapType, shardId,
+// instance, buildId). Bit 0 = map open, bit 3 = game has focus.
+uint32_t read_ui_state(const LinkedMem& m);
+bool     ui_map_open(uint32_t ui_state);
+bool     ui_game_focused(uint32_t ui_state);
 }

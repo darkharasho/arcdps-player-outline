@@ -42,6 +42,21 @@ TEST_CASE("read_map_type pulls mapType from context at offset 32") {
     CHECK(read_map_type(m) == 12u);
     CHECK(classify_map_type(read_map_type(m)) == GameMode::WvW);
 }
+TEST_CASE("ui_state predicates decode map-open and focus bits") {
+    CHECK(ui_map_open(0x1)     == true);
+    CHECK(ui_map_open(0x8)     == false);
+    CHECK(ui_game_focused(0x8) == true);
+    CHECK(ui_game_focused(0x1) == false);
+    // independent bits: map open AND focused
+    CHECK(ui_map_open(0x9)     == true);
+    CHECK(ui_game_focused(0x9) == true);
+}
+TEST_CASE("read_ui_state pulls uiState from context at offset 48") {
+    LinkedMem m{};
+    uint32_t st = 0x9;
+    std::memcpy(m.context + 48, &st, sizeof st);
+    CHECK(read_ui_state(m) == 0x9u);
+}
 TEST_CASE("avatar invalid when tick zero / position origin") {
     LinkedMem m{};
     CHECK(read_avatar(m).valid == false);
