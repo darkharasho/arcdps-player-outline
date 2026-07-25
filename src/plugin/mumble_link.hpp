@@ -2,6 +2,12 @@
 #include "mumble_data.hpp"
 namespace plugin {
 
+// Per-frame session facts derived from the live block (not position/camera).
+struct SessionInfo {
+    core::GameMode mode = core::GameMode::PvE;
+    core::GameRace race = core::GameRace::Unknown;
+};
+
 // Reads GW2's live MumbleLink block by scanning our own process address space.
 // Under Proton the block is populated by GW2 inside Gw2-64.exe (where arcdps —
 // and thus this plugin — runs) but is NOT reachable via the named shared-memory
@@ -16,9 +22,9 @@ public:
     // block; our empty section fails the live-block signature). Call once at init.
     void ensure_link_object();
 
-    // Fills avatar/cam/mode from the latest torn-read-safe snapshot.
+    // Fills avatar/cam/session from the latest torn-read-safe snapshot.
     // Returns false if no live block is found or the avatar isn't in a map.
-    bool sample(core::AvatarState& avatar, core::CameraState& cam, core::GameMode& mode);
+    bool sample(core::AvatarState& avatar, core::CameraState& cam, SessionInfo& session);
 private:
     void* own_handle_ = nullptr;              // HANDLE to the named section we hold
     void* own_view_ = nullptr;                // mapped view of it

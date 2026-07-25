@@ -22,6 +22,19 @@ TEST_CASE("classify_map_type buckets modes; unknown falls back to PvE") {
     CHECK(classify_map_type(0)  == GameMode::PvE);   // redirect/unknown
     CHECK(classify_map_type(999) == GameMode::PvE);  // out of range
 }
+TEST_CASE("parse_identity_race maps the race int") {
+    CHECK(parse_identity_race(R"({"name":"A","race":0,"fov":0.9})") == GameRace::Asura);
+    CHECK(parse_identity_race(R"({"race":1})") == GameRace::Charr);
+    CHECK(parse_identity_race(R"({"race":2})") == GameRace::Human);
+    CHECK(parse_identity_race(R"({"race":3})") == GameRace::Norn);
+    CHECK(parse_identity_race(R"({"race":4})") == GameRace::Sylvari);
+}
+TEST_CASE("parse_identity_race is Unknown when missing or out of range") {
+    CHECK(parse_identity_race(R"({"name":"x"})") == GameRace::Unknown);
+    CHECK(parse_identity_race("") == GameRace::Unknown);
+    CHECK(parse_identity_race(R"({"race":9})") == GameRace::Unknown);
+    CHECK(parse_identity_race(nullptr) == GameRace::Unknown);
+}
 TEST_CASE("read_map_type pulls mapType from context at offset 32") {
     LinkedMem m{};
     uint32_t mt = 12;   // red borderlands

@@ -1,4 +1,5 @@
 #pragma once
+#include "mumble_data.hpp"
 namespace plugin {
 
 enum class MarkerStyle {
@@ -32,6 +33,11 @@ struct Config {
     float glow_amount = 0.5f;    // outer-glow strength (toned down by default)
     float char_height = 1.9f;    // meters feet->head; sizes the aura
 
+    // Height fit: derive head-anchored positions from the player's race.
+    bool  fit_height_to_race = true;
+    float race_head_m[5] = {1.00f, 2.20f, 1.85f, 2.55f, 1.80f}; // Asura,Charr,Human,Norn,Sylvari
+    float height_nudge   = 0.0f;  // meters, added on top of the fitted height
+
     // Chevron
     float chevron_size = 24.0f;  // px
     float head_offset  = 2.2f;   // meters above feet
@@ -48,8 +54,12 @@ struct Config {
     float arrow_size   = 18.0f;  // px
 };
 
+// Fitted head height (meters, feet->top-of-head) for a race, incl. the nudge.
+// Unknown race resolves to the Human entry.
+float fitted_head_height(const Config& c, core::GameRace race);
+
 void load_config(Config& c, const char* path);
 void save_config(const Config& c, const char* path);
-void draw_options(Config& c);    // arcdps options_end callback body
+void draw_options(Config& c, core::GameRace detected);   // arcdps options_end callback body
 
 }

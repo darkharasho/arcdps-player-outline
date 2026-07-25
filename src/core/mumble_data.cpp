@@ -15,6 +15,18 @@ float parse_identity_fov(const char* id, float fallback) {
     return v;
 }
 
+GameRace parse_identity_race(const char* id) {
+    if (!id) return GameRace::Unknown;
+    const char* key = std::strstr(id, "\"race\"");
+    if (!key) return GameRace::Unknown;
+    const char* colon = std::strchr(key, ':');
+    if (!colon) return GameRace::Unknown;
+    char* end = nullptr;
+    long v = std::strtol(colon + 1, &end, 10);
+    if (end == colon + 1 || v < 0 || v > 4) return GameRace::Unknown;
+    return (GameRace)v;   // 0..4 aligns with the enum order
+}
+
 AvatarState read_avatar(const LinkedMem& m) {
     AvatarState a;
     a.position = { m.fAvatarPosition[0], m.fAvatarPosition[1], m.fAvatarPosition[2] };

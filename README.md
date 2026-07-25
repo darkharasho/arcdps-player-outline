@@ -18,6 +18,8 @@ It marks *only you*. It does **not** outline other players/NPCs and does **not**
 - **6 marker styles** — projected ground ring (default; a true floor circle that reads as a circle overhead and an ellipse from the side), adaptive silhouette glow, overhead chevron, light beam, ring + pip, ring + chevron.
 - **Smooth tracking** — [One Euro](https://gery.casiez.net/1euro/) filtering (calm at rest, responsive when moving) with torn-read protection.
 - **Configurable outline** — a contrasting border around every element (e.g. blue fill + white outline) so it stays legible on any background.
+- **Per-mode toggle** — show the marker in PvE, WvW, or both; structured PvP is always off.
+- **Fit height to race** — auto-sizes head-anchored styles to your character's race (so the chevron sits above a Norn's head, not their chest), with an editable per-race height table and a manual nudge.
 - **Distance fade** — eases the marker down when the camera is zoomed in close (solo), full when zoomed out (in a pile).
 - **Off-screen arrow** — a screen-edge arrow points to you when the camera is turned away.
 - **Live config** — full options panel (color, opacity, per-style sliders) with settings saved to an ini next to the DLL.

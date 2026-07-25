@@ -72,22 +72,19 @@ static bool copy_stable(const core::LinkedMem* src, core::LinkedMem& dst) {
     return false;   // never settled this frame
 }
 
-static float fov_from_identity(const wchar_t* wid) {
-    char utf8[512] = {0};
-    WideCharToMultiByte(CP_UTF8, 0, wid, -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
-    return core::parse_identity_fov(utf8, 1.222f);   // ~70deg vertical fallback
-}
-
 bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam,
-                          core::GameMode& mode) {
+                          SessionInfo& session) {
     if (!link_ || !region_ok(link_) || !looks_like_mumble(link_)) link_ = scan();
     if (!link_) return false;
     core::LinkedMem lm;
     if (!copy_stable(link_, lm)) return false;
     avatar = core::read_avatar(lm);
     if (!avatar.valid) return false;
-    cam = core::read_camera(lm, fov_from_identity(lm.identity));
-    mode = core::classify_map_type(core::read_map_type(lm));
+    char utf8[512] = {0};
+    WideCharToMultiByte(CP_UTF8, 0, lm.identity, -1, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    cam = core::read_camera(lm, core::parse_identity_fov(utf8, 1.222f));
+    session.mode = core::classify_map_type(core::read_map_type(lm));
+    session.race = core::parse_identity_race(utf8);
     return true;
 }
 

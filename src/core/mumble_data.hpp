@@ -27,7 +27,12 @@ struct CameraState { Vec3 position{}; Vec3 front{}; Vec3 up{0.0f, 1.0f, 0.0f}; f
 // maps classify as PvE so the marker fails toward being shown.
 enum class GameMode { PvE, WvW, PvP };
 
+// Player race, read from the identity JSON "race" field (0..4). Unknown when
+// the field is absent or out of range.
+enum class GameRace { Asura, Charr, Human, Norn, Sylvari, Unknown };
+
 float parse_identity_fov(const char* utf8_identity, float fallback);
+GameRace parse_identity_race(const char* utf8_identity);
 AvatarState read_avatar(const LinkedMem& m);
 CameraState read_camera(const LinkedMem& m, float fov_y);
 

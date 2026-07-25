@@ -19,6 +19,7 @@ static const char* kName  = "player_outline";
 static const char* kBuild = PLUGIN_VERSION;   // injected from the git tag at build time
 static plugin::MumbleReader g_reader;
 static plugin::Config g_cfg;
+static core::GameRace g_race = core::GameRace::Unknown;   // last sampled race (for options UI)
 static core::OneEuro g_fx, g_fy, g_fh;   // smooth anchor x/y and body height (px)
 static HMODULE g_self = nullptr;
 static char g_ini[MAX_PATH] = {0};
@@ -63,14 +64,20 @@ static bool build_ground_ring(const core::AvatarState& avatar, const core::Camer
 static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     if (!not_charsel_or_loading || !g_cfg.enabled) { reset_smoothing(); return 0; }
 
-    core::AvatarState avatar; core::CameraState cam; core::GameMode mode;
-    if (!g_reader.sample(avatar, cam, mode)) { reset_smoothing(); return 0; }
+    core::AvatarState avatar; core::CameraState cam; plugin::SessionInfo session;
+    if (!g_reader.sample(avatar, cam, session)) { reset_smoothing(); return 0; }
+    g_race = session.race;   // cache for the options panel to highlight
 
     // Per-mode gate: PvP is always off; PvE/WvW follow their toggles.
-    bool mode_on = (mode == core::GameMode::WvW) ? g_cfg.show_in_wvw
-                 : (mode == core::GameMode::PvE) ? g_cfg.show_in_pve
+    bool mode_on = (session.mode == core::GameMode::WvW) ? g_cfg.show_in_wvw
+                 : (session.mode == core::GameMode::PvE) ? g_cfg.show_in_pve
                  : false;   // PvP
     if (!mode_on) { reset_smoothing(); return 0; }
+
+    // Head height (feet->top-of-head) for head-anchored styles. When race-fit is
+    // on, derive it from the player's race; otherwise fall back to per-style config.
+    bool  fit = g_cfg.fit_height_to_race;
+    float head_h = fit ? plugin::fitted_head_height(g_cfg, session.race) : 0.0f;
 
     ImVec2 sz = ImGui::GetIO().DisplaySize;
 
@@ -117,7 +124,8 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     // Anchor to smooth: feet for most styles, the head for the standalone chevron.
     float ax = feet.x, ay = feet.y;
     if (g_cfg.style == plugin::MarkerStyle::Chevron) {
-        core::Vec3 hw = avatar.position + core::Vec3{0.0f, g_cfg.head_offset, 0.0f};
+        float choff = fit ? head_h : g_cfg.head_offset;
+        core::Vec3 hw = avatar.position + core::Vec3{0.0f, choff, 0.0f};
         core::ScreenPoint h = core::world_to_screen(hw, cam, sz.x, sz.y);
         if (!h.behind) { ax = h.x; ay = h.y; }
     }
@@ -134,12 +142,14 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
             if (build_ground_ring(avatar, cam, pts, N, g_cfg.ring_radius, sz.x, sz.y, ox, oy)) {
                 plugin::draw_ground_ring(pts, N, rgba, 2.5f, ol);
                 if (g_cfg.style == plugin::MarkerStyle::RingPip) {
+                    float pip_h = fit ? 0.5f * head_h : 1.2f;
                     core::ScreenPoint hp = core::world_to_screen(
-                        avatar.position + core::Vec3{0.0f, 1.2f, 0.0f}, cam, sz.x, sz.y);
+                        avatar.position + core::Vec3{0.0f, pip_h, 0.0f}, cam, sz.x, sz.y);
                     if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba, ol);
                 } else if (g_cfg.style == plugin::MarkerStyle::RingChevron) {
+                    float rc_h = fit ? head_h : 2.4f;
                     core::ScreenPoint hp = core::world_to_screen(
-                        avatar.position + core::Vec3{0.0f, 2.4f, 0.0f}, cam, sz.x, sz.y);
+                        avatar.position + core::Vec3{0.0f, rc_h, 0.0f}, cam, sz.x, sz.y);
                     float hx = hp.behind ? sx : hp.x + ox;
                     float hy = hp.behind ? (sy - 60.0f) : hp.y + oy;
                     plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba, ol);
@@ -150,7 +160,8 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
         case plugin::MarkerStyle::SilhouetteGlow: {
             float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
             float d = dist < 0.5f ? 0.5f : dist;
-            float full_px = focal * g_cfg.char_height / d;   // side-on height
+            float body_h = fit ? head_h : g_cfg.char_height;
+            float full_px = focal * body_h / d;              // side-on height
             if (full_px < 22.0f) full_px = 22.0f;
             // Collapse height as the camera looks down (front.y ~1 overhead); width
             // stays constant so the capsule flattens to a disc.
@@ -180,7 +191,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     return 0;
 }
 
-static uintptr_t options_cb() { plugin::draw_options(g_cfg); return 0; }
+static uintptr_t options_cb() { plugin::draw_options(g_cfg, g_race); return 0; }
 
 static arcdps_exports* mod_init() {
     resolve_ini_path();
