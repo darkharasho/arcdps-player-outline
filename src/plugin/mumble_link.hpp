@@ -16,9 +16,9 @@ public:
     // block; our empty section fails the live-block signature). Call once at init.
     void ensure_link_object();
 
-    // Fills avatar/cam from the latest torn-read-safe snapshot.
+    // Fills avatar/cam/mode from the latest torn-read-safe snapshot.
     // Returns false if no live block is found or the avatar isn't in a map.
-    bool sample(core::AvatarState& avatar, core::CameraState& cam);
+    bool sample(core::AvatarState& avatar, core::CameraState& cam, core::GameMode& mode);
 private:
     void* own_handle_ = nullptr;              // HANDLE to the named section we hold
     void* own_view_ = nullptr;                // mapped view of it

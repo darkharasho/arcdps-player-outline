@@ -9,6 +9,8 @@ void save_config(const Config& c, const char* path) {
     FILE* f = std::fopen(path, "w");
     if (!f) return;
     std::fprintf(f, "enabled=%d\n", c.enabled ? 1 : 0);
+    std::fprintf(f, "show_in_pve=%d\nshow_in_wvw=%d\n",
+                 c.show_in_pve ? 1 : 0, c.show_in_wvw ? 1 : 0);
     std::fprintf(f, "style=%d\n", (int)c.style);
     std::fprintf(f, "r=%.4f\ng=%.4f\nb=%.4f\n", c.color[0], c.color[1], c.color[2]);
     std::fprintf(f, "opacity=%.4f\n", c.opacity);
@@ -62,6 +64,8 @@ void load_config(Config& c, const char* path) {
     float v;
     while (std::fscanf(f, " %31[^=\n]=%f", key, &v) == 2) {
         if      (!std::strcmp(key, "enabled"))      c.enabled = (v != 0);
+        else if (!std::strcmp(key, "show_in_pve"))  c.show_in_pve = (v != 0);
+        else if (!std::strcmp(key, "show_in_wvw"))  c.show_in_wvw = (v != 0);
         else if (!std::strcmp(key, "style"))        c.style = (MarkerStyle)(int)v;
         else if (!std::strcmp(key, "r"))            c.color[0] = v;
         else if (!std::strcmp(key, "g"))            c.color[1] = v;
@@ -92,6 +96,14 @@ void load_config(Config& c, const char* path) {
 
 void draw_options(Config& c) {
     ImGui::Checkbox("Show self marker", &c.enabled);
+
+    ImGui::TextUnformatted("Game modes");
+    ImGui::Checkbox("PvE", &c.show_in_pve);
+    ImGui::SameLine();
+    ImGui::Checkbox("WvW", &c.show_in_wvw);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(PvP always off)");
+    ImGui::Separator();
 
     const char* styles[] = { "Ground ring", "Silhouette glow", "Chevron (overhead)",
                              "Beam", "Ring + pip", "Ring + chevron" };

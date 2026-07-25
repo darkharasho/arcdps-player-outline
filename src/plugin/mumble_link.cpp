@@ -78,7 +78,8 @@ static float fov_from_identity(const wchar_t* wid) {
     return core::parse_identity_fov(utf8, 1.222f);   // ~70deg vertical fallback
 }
 
-bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam) {
+bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam,
+                          core::GameMode& mode) {
     if (!link_ || !region_ok(link_) || !looks_like_mumble(link_)) link_ = scan();
     if (!link_) return false;
     core::LinkedMem lm;
@@ -86,6 +87,7 @@ bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam) {
     avatar = core::read_avatar(lm);
     if (!avatar.valid) return false;
     cam = core::read_camera(lm, fov_from_identity(lm.identity));
+    mode = core::classify_map_type(core::read_map_type(lm));
     return true;
 }
 

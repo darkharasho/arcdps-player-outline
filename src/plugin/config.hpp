@@ -12,6 +12,9 @@ enum class MarkerStyle {
 
 struct Config {
     bool        enabled = true;
+    // Per-mode gates (structured PvP is always off, not configurable).
+    bool        show_in_pve = true;
+    bool        show_in_wvw = true;
     MarkerStyle style   = MarkerStyle::GroundRing;
     float       color[3] = {0.16f, 0.92f, 0.78f};   // teal
     float       opacity  = 0.90f;                   // 0..1

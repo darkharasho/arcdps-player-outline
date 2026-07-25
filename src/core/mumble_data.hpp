@@ -23,7 +23,16 @@ struct LinkedMem {
 struct AvatarState { Vec3 position{}; bool valid{false}; };
 struct CameraState { Vec3 position{}; Vec3 front{}; Vec3 up{0.0f, 1.0f, 0.0f}; float fov_y{1.222f}; };
 
+// Broad game mode, derived from GW2's MumbleContext mapType. Unknown/loading
+// maps classify as PvE so the marker fails toward being shown.
+enum class GameMode { PvE, WvW, PvP };
+
 float parse_identity_fov(const char* utf8_identity, float fallback);
 AvatarState read_avatar(const LinkedMem& m);
 CameraState read_camera(const LinkedMem& m, float fov_y);
+
+// mapType lives in the GW2 MumbleContext packed into LinkedMem::context, at
+// byte offset 32 (after serverAddress[28] + uint32 mapId).
+uint32_t read_map_type(const LinkedMem& m);
+GameMode classify_map_type(uint32_t map_type);
 }

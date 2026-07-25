@@ -63,8 +63,14 @@ static bool build_ground_ring(const core::AvatarState& avatar, const core::Camer
 static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t /*hide*/) {
     if (!not_charsel_or_loading || !g_cfg.enabled) { reset_smoothing(); return 0; }
 
-    core::AvatarState avatar; core::CameraState cam;
-    if (!g_reader.sample(avatar, cam)) { reset_smoothing(); return 0; }
+    core::AvatarState avatar; core::CameraState cam; core::GameMode mode;
+    if (!g_reader.sample(avatar, cam, mode)) { reset_smoothing(); return 0; }
+
+    // Per-mode gate: PvP is always off; PvE/WvW follow their toggles.
+    bool mode_on = (mode == core::GameMode::WvW) ? g_cfg.show_in_wvw
+                 : (mode == core::GameMode::PvE) ? g_cfg.show_in_pve
+                 : false;   // PvP
+    if (!mode_on) { reset_smoothing(); return 0; }
 
     ImVec2 sz = ImGui::GetIO().DisplaySize;
 

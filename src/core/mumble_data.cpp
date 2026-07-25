@@ -23,6 +23,24 @@ AvatarState read_avatar(const LinkedMem& m) {
     return a;
 }
 
+uint32_t read_map_type(const LinkedMem& m) {
+    uint32_t mt = 0;
+    std::memcpy(&mt, m.context + 32, sizeof mt);   // serverAddress[28] + mapId(4)
+    return mt;
+}
+
+GameMode classify_map_type(uint32_t map_type) {
+    switch (map_type) {
+        case 9: case 10: case 11: case 12:
+        case 13: case 14: case 15: case 19:
+            return GameMode::WvW;
+        case 2: case 6: case 8:
+            return GameMode::PvP;
+        default:
+            return GameMode::PvE;   // open world, instances, unknown/loading
+    }
+}
+
 CameraState read_camera(const LinkedMem& m, float fov_y) {
     CameraState c;
     c.position = { m.fCameraPosition[0], m.fCameraPosition[1], m.fCameraPosition[2] };
