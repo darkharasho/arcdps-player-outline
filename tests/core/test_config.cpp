@@ -69,3 +69,23 @@ TEST_CASE("new per-type fields round-trip through save/load") {
     CHECK(b.chevron_manual_m == doctest::Approx(2.66f));
     CHECK(b.race_head_m[3] == doctest::Approx(2.90f));
 }
+
+TEST_CASE("load_config ignores stale height_nudge/head_offset keys without crashing") {
+    const char* path = "test_config_stalekeys.ini";
+    std::FILE* f = std::fopen(path, "w");
+    REQUIRE(f != nullptr);
+    std::fprintf(f, "enabled=1\n");
+    std::fprintf(f, "height_nudge=0.5\n");
+    std::fprintf(f, "head_offset=2.1\n");
+    std::fprintf(f, "pip_nudge=0.30\n");
+    std::fprintf(f, "chevron_manual_m=2.40\n");
+    std::fclose(f);
+
+    Config c;
+    load_config(c, path);
+    std::remove(path);
+
+    CHECK(c.enabled == true);
+    CHECK(c.pip_nudge == doctest::Approx(0.30f));
+    CHECK(c.chevron_manual_m == doctest::Approx(2.40f));
+}
