@@ -19,13 +19,15 @@ void save_config(const Config& c, const char* path) {
     std::fprintf(f, "ring_radius=%.4f\n", c.ring_radius);
     std::fprintf(f, "glow_width=%.4f\nglow_amount=%.4f\nchar_height=%.4f\n",
                  c.glow_width, c.glow_amount, c.char_height);
-    std::fprintf(f, "fit_height_to_race=%d\nheight_nudge=%.4f\n",
-                 c.fit_height_to_race ? 1 : 0, c.height_nudge);
+    std::fprintf(f, "fit_height_to_race=%d\n", c.fit_height_to_race ? 1 : 0);
+    std::fprintf(f, "pip_nudge=%.4f\nchevron_nudge=%.4f\n", c.pip_nudge, c.chevron_nudge);
+    std::fprintf(f, "pip_manual_m=%.4f\nchevron_manual_m=%.4f\n",
+                 c.pip_manual_m, c.chevron_manual_m);
     std::fprintf(f, "race_head_asura=%.4f\nrace_head_charr=%.4f\nrace_head_human=%.4f\n"
                     "race_head_norn=%.4f\nrace_head_sylvari=%.4f\n",
                  c.race_head_m[0], c.race_head_m[1], c.race_head_m[2],
                  c.race_head_m[3], c.race_head_m[4]);
-    std::fprintf(f, "chevron_size=%.4f\nhead_offset=%.4f\n", c.chevron_size, c.head_offset);
+    std::fprintf(f, "chevron_size=%.4f\n", c.chevron_size);
     std::fprintf(f, "beam_height=%.4f\nbeam_width=%.4f\n", c.beam_height, c.beam_width);
     std::fprintf(f, "fade_enabled=%d\nfade_near=%.4f\nfade_far=%.4f\n",
                  c.fade_enabled ? 1 : 0, c.fade_near, c.fade_far);
@@ -55,9 +57,11 @@ static void sanitize(Config& c) {
     c.glow_amount  = clampf(c.glow_amount, 0.0f, 2.0f);
     c.char_height  = clampf(c.char_height, 0.8f, 3.2f);
     for (int i = 0; i < 5; ++i) c.race_head_m[i] = clampf(c.race_head_m[i], 0.5f, 3.5f);
-    c.height_nudge = clampf(c.height_nudge, -1.0f, 1.0f);
+    c.pip_nudge     = clampf(c.pip_nudge,     -0.5f, 1.5f);
+    c.chevron_nudge = clampf(c.chevron_nudge, -0.5f, 1.5f);
+    c.pip_manual_m     = clampf(c.pip_manual_m,     0.0f, 3.5f);
+    c.chevron_manual_m = clampf(c.chevron_manual_m, 0.0f, 3.5f);
     c.chevron_size = clampf(c.chevron_size, 8.0f, 80.0f);
-    c.head_offset  = clampf(c.head_offset, 0.0f, 3.5f);
     c.beam_height  = clampf(c.beam_height, 0.5f, 6.0f);
     c.beam_width   = clampf(c.beam_width, 2.0f, 40.0f);
     c.fade_near    = clampf(c.fade_near, 0.5f, 30.0f);
@@ -90,14 +94,16 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "glow_amount"))  c.glow_amount = v;
         else if (!std::strcmp(key, "char_height"))  c.char_height = v;
         else if (!std::strcmp(key, "fit_height_to_race")) c.fit_height_to_race = (v != 0);
-        else if (!std::strcmp(key, "height_nudge"))    c.height_nudge = v;
+        else if (!std::strcmp(key, "pip_nudge"))        c.pip_nudge = v;
+        else if (!std::strcmp(key, "chevron_nudge"))    c.chevron_nudge = v;
+        else if (!std::strcmp(key, "pip_manual_m"))     c.pip_manual_m = v;
+        else if (!std::strcmp(key, "chevron_manual_m")) c.chevron_manual_m = v;
         else if (!std::strcmp(key, "race_head_asura"))   c.race_head_m[0] = v;
         else if (!std::strcmp(key, "race_head_charr"))   c.race_head_m[1] = v;
         else if (!std::strcmp(key, "race_head_human"))   c.race_head_m[2] = v;
         else if (!std::strcmp(key, "race_head_norn"))    c.race_head_m[3] = v;
         else if (!std::strcmp(key, "race_head_sylvari")) c.race_head_m[4] = v;
         else if (!std::strcmp(key, "chevron_size")) c.chevron_size = v;
-        else if (!std::strcmp(key, "head_offset"))  c.head_offset = v;
         else if (!std::strcmp(key, "beam_height"))  c.beam_height = v;
         else if (!std::strcmp(key, "beam_width"))   c.beam_width = v;
         else if (!std::strcmp(key, "fade_enabled")) c.fade_enabled = (v != 0);
@@ -112,9 +118,22 @@ void load_config(Config& c, const char* path) {
     sanitize(c);
 }
 
+static int race_index(core::GameRace race) {
+    return (race == core::GameRace::Unknown) ? 2 : (int)race;   // Unknown -> Human
+}
+
 float fitted_head_height(const Config& c, core::GameRace race) {
-    int idx = (race == core::GameRace::Unknown) ? 2 : (int)race;   // Unknown -> Human
-    return c.race_head_m[idx] + c.height_nudge;
+    return c.race_head_m[race_index(race)];   // plain race height, no nudge
+}
+
+float effective_pip_height(const Config& c, core::GameRace race) {
+    float base = c.fit_height_to_race ? c.race_head_m[race_index(race)] : c.pip_manual_m;
+    return base + c.pip_nudge;
+}
+
+float effective_chevron_height(const Config& c, core::GameRace race) {
+    float base = c.fit_height_to_race ? c.race_head_m[race_index(race)] : c.chevron_manual_m;
+    return base + c.chevron_nudge;
 }
 
 }
