@@ -130,70 +130,59 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
 
     float dt = ImGui::GetIO().DeltaTime;
 
-    // Anchor to smooth: feet for most styles, the head for the standalone chevron.
-    float ax = feet.x, ay = feet.y;
-    if (g_cfg.style == plugin::MarkerStyle::Chevron) {
-        core::Vec3 hw = avatar.position + core::Vec3{0.0f, chevron_h, 0.0f};
-        core::ScreenPoint h = core::world_to_screen(hw, cam, sz.x, sz.y);
-        if (!h.behind) { ax = h.x; ay = h.y; }
-    }
-    float sx = g_fx.filter(ax, dt);
-    float sy = g_fy.filter(ay, dt);
-    float ox = sx - feet.x, oy = sy - feet.y;   // de-jitter offset (feet-anchored styles)
+    // Smooth the feet anchor once; head-anchored elements derive their screen
+    // position from world_to_screen + this de-jitter offset.
+    float sx = g_fx.filter(feet.x, dt);
+    float sy = g_fy.filter(feet.y, dt);
+    float ox = sx - feet.x, oy = sy - feet.y;
 
-    switch (g_cfg.style) {
-        case plugin::MarkerStyle::GroundRing:
-        case plugin::MarkerStyle::RingPip:
-        case plugin::MarkerStyle::RingChevron: {
-            const int N = 40;
-            ImVec2 pts[N];
-            if (build_ground_ring(avatar, cam, pts, N, g_cfg.ring_radius, sz.x, sz.y, ox, oy)) {
-                plugin::draw_ground_ring(pts, N, rgba, 2.5f, ol);
-                if (g_cfg.style == plugin::MarkerStyle::RingPip) {
-                    core::ScreenPoint hp = core::world_to_screen(
-                        avatar.position + core::Vec3{0.0f, pip_h, 0.0f}, cam, sz.x, sz.y);
-                    if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba, ol);
-                } else if (g_cfg.style == plugin::MarkerStyle::RingChevron) {
-                    core::ScreenPoint hp = core::world_to_screen(
-                        avatar.position + core::Vec3{0.0f, chevron_h, 0.0f}, cam, sz.x, sz.y);
-                    float hx = hp.behind ? sx : hp.x + ox;
-                    float hy = hp.behind ? (sy - 60.0f) : hp.y + oy;
-                    plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba, ol);
-                }
-            }
-            break;
-        }
-        case plugin::MarkerStyle::SilhouetteGlow: {
-            float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
-            float d = dist < 0.5f ? 0.5f : dist;
-            float body_h = fit ? plugin::fitted_head_height(g_cfg, session.race)
-                               : g_cfg.char_height;
-            float full_px = focal * body_h / d;              // side-on height
-            if (full_px < 22.0f) full_px = 22.0f;
-            // Collapse height as the camera looks down (front.y ~1 overhead); width
-            // stays constant so the capsule flattens to a disc.
-            float side = 1.0f - std::fabs(cam.front.y);
-            if (side < 0.0f) side = 0.0f; if (side > 1.0f) side = 1.0f;
-            float body_px = full_px * side;
-            float min_h = full_px * 0.22f;
-            if (body_px < min_h) body_px = min_h;
-            float width_px = full_px * 0.40f * g_cfg.glow_width;
-            float sh = g_fh.filter(body_px, dt);
-            plugin::draw_silhouette_glow(sx, sy - sh * 0.5f, sh, width_px,
-                                         rgba, g_cfg.glow_amount, ol);
-            break;
-        }
-        case plugin::MarkerStyle::Chevron: {
-            plugin::draw_chevron(sx, sy, g_cfg.chevron_size, rgba, ol);
-            break;
-        }
-        case plugin::MarkerStyle::Beam: {
-            core::ScreenPoint top = core::world_to_screen(
-                avatar.position + core::Vec3{0.0f, g_cfg.beam_height, 0.0f}, cam, sz.x, sz.y);
-            float top_y = top.behind ? (sy - 200.0f) : (top.y + oy);
-            plugin::draw_beam(sx, sy, top_y, g_cfg.beam_width, rgba, ol);
-            break;
-        }
+    // Draw each enabled element back-to-front: ring, glow, beam, pip, chevron.
+    if (g_cfg.show_ring) {
+        const int N = 40;
+        ImVec2 pts[N];
+        if (build_ground_ring(avatar, cam, pts, N, g_cfg.ring_radius, sz.x, sz.y, ox, oy))
+            plugin::draw_ground_ring(pts, N, rgba, 2.5f, ol);
+    }
+
+    if (g_cfg.show_glow) {
+        float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
+        float d = dist < 0.5f ? 0.5f : dist;
+        float body_h = fit ? plugin::fitted_head_height(g_cfg, session.race)
+                           : g_cfg.char_height;
+        float full_px = focal * body_h / d;              // side-on height
+        if (full_px < 22.0f) full_px = 22.0f;
+        // Collapse height as the camera looks down (front.y ~1 overhead); width
+        // stays constant so the capsule flattens to a disc.
+        float side = 1.0f - std::fabs(cam.front.y);
+        if (side < 0.0f) side = 0.0f; if (side > 1.0f) side = 1.0f;
+        float body_px = full_px * side;
+        float min_h = full_px * 0.22f;
+        if (body_px < min_h) body_px = min_h;
+        float width_px = full_px * 0.40f * g_cfg.glow_width;
+        float sh = g_fh.filter(body_px, dt);
+        plugin::draw_silhouette_glow(sx, sy - sh * 0.5f, sh, width_px,
+                                     rgba, g_cfg.glow_amount, ol);
+    }
+
+    if (g_cfg.show_beam) {
+        core::ScreenPoint top = core::world_to_screen(
+            avatar.position + core::Vec3{0.0f, g_cfg.beam_height, 0.0f}, cam, sz.x, sz.y);
+        float top_y = top.behind ? (sy - 200.0f) : (top.y + oy);
+        plugin::draw_beam(sx, sy, top_y, g_cfg.beam_width, rgba, ol);
+    }
+
+    if (g_cfg.show_pip) {
+        core::ScreenPoint hp = core::world_to_screen(
+            avatar.position + core::Vec3{0.0f, pip_h, 0.0f}, cam, sz.x, sz.y);
+        if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba, ol);
+    }
+
+    if (g_cfg.show_chevron) {
+        core::ScreenPoint hp = core::world_to_screen(
+            avatar.position + core::Vec3{0.0f, chevron_h, 0.0f}, cam, sz.x, sz.y);
+        float hx = hp.behind ? sx : hp.x + ox;
+        float hy = hp.behind ? (sy - 60.0f) : hp.y + oy;
+        plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba, ol);
     }
     return 0;
 }
