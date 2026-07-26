@@ -28,6 +28,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         src/plugin/mumble_link.cpp
         src/plugin/marker.cpp
         src/plugin/config.cpp
+        src/plugin/config_io.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp
         ${IMGUI_SRC})
@@ -47,10 +48,12 @@ else()
         tests/core/test_mumble_parse.cpp
         tests/core/test_camera.cpp
         tests/core/test_one_euro.cpp
+        tests/core/test_config.cpp
+        src/plugin/config_io.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp)
     target_include_directories(core_tests PRIVATE
-        third_party/doctest src/core)
+        third_party/doctest src/core src/plugin)
     enable_testing()
     add_test(NAME core_tests COMMAND core_tests)
 endif()

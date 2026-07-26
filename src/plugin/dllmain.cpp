@@ -82,10 +82,11 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
                  : false;   // PvP
     if (!mode_on) { reset_smoothing(); return 0; }
 
-    // Head height (feet->top-of-head) for head-anchored styles. When race-fit is
-    // on, derive it from the player's race; otherwise fall back to per-style config.
+    // Head-anchored heights (feet->element, meters). Pip and chevron each resolve
+    // their own base (race height when fit is on, else a manual base) + own nudge.
     bool  fit = g_cfg.fit_height_to_race;
-    float head_h = fit ? plugin::fitted_head_height(g_cfg, session.race) : 0.0f;
+    float pip_h     = plugin::effective_pip_height(g_cfg, session.race);
+    float chevron_h = plugin::effective_chevron_height(g_cfg, session.race);
 
     ImVec2 sz = ImGui::GetIO().DisplaySize;
 
@@ -132,8 +133,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
     // Anchor to smooth: feet for most styles, the head for the standalone chevron.
     float ax = feet.x, ay = feet.y;
     if (g_cfg.style == plugin::MarkerStyle::Chevron) {
-        float choff = fit ? head_h : g_cfg.head_offset;
-        core::Vec3 hw = avatar.position + core::Vec3{0.0f, choff, 0.0f};
+        core::Vec3 hw = avatar.position + core::Vec3{0.0f, chevron_h, 0.0f};
         core::ScreenPoint h = core::world_to_screen(hw, cam, sz.x, sz.y);
         if (!h.behind) { ax = h.x; ay = h.y; }
     }
@@ -150,14 +150,12 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
             if (build_ground_ring(avatar, cam, pts, N, g_cfg.ring_radius, sz.x, sz.y, ox, oy)) {
                 plugin::draw_ground_ring(pts, N, rgba, 2.5f, ol);
                 if (g_cfg.style == plugin::MarkerStyle::RingPip) {
-                    float pip_h = fit ? 0.5f * head_h : 1.2f;
                     core::ScreenPoint hp = core::world_to_screen(
                         avatar.position + core::Vec3{0.0f, pip_h, 0.0f}, cam, sz.x, sz.y);
                     if (!hp.behind) plugin::draw_pip(hp.x + ox, hp.y + oy, 4.0f, rgba, ol);
                 } else if (g_cfg.style == plugin::MarkerStyle::RingChevron) {
-                    float rc_h = fit ? head_h : 2.4f;
                     core::ScreenPoint hp = core::world_to_screen(
-                        avatar.position + core::Vec3{0.0f, rc_h, 0.0f}, cam, sz.x, sz.y);
+                        avatar.position + core::Vec3{0.0f, chevron_h, 0.0f}, cam, sz.x, sz.y);
                     float hx = hp.behind ? sx : hp.x + ox;
                     float hy = hp.behind ? (sy - 60.0f) : hp.y + oy;
                     plugin::draw_chevron(hx, hy, g_cfg.chevron_size, rgba, ol);
@@ -168,7 +166,8 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
         case plugin::MarkerStyle::SilhouetteGlow: {
             float focal = (sz.y * 0.5f) / std::tan(cam.fov_y * 0.5f);
             float d = dist < 0.5f ? 0.5f : dist;
-            float body_h = fit ? head_h : g_cfg.char_height;
+            float body_h = fit ? plugin::fitted_head_height(g_cfg, session.race)
+                               : g_cfg.char_height;
             float full_px = focal * body_h / d;              // side-on height
             if (full_px < 22.0f) full_px = 22.0f;
             // Collapse height as the camera looks down (front.y ~1 overhead); width

@@ -35,12 +35,17 @@ struct Config {
 
     // Height fit: derive head-anchored positions from the player's race.
     bool  fit_height_to_race = true;
-    float race_head_m[5] = {1.00f, 2.20f, 1.85f, 2.55f, 1.80f}; // Asura,Charr,Human,Norn,Sylvari
-    float height_nudge   = 0.0f;  // meters, added on top of the fitted height
+    float race_head_m[5] = {1.05f, 2.35f, 2.05f, 2.75f, 2.00f}; // Asura,Charr,Human,Norn,Sylvari
+
+    // Per-type height adjusters (meters above the resolved base height).
+    float pip_nudge     = 0.20f;   // pip hover above head
+    float chevron_nudge = 0.45f;   // chevron hover above head (floats higher)
+    // Manual base heights, used only when fit_height_to_race is OFF.
+    float pip_manual_m     = 2.20f;
+    float chevron_manual_m = 2.20f;
 
     // Chevron
     float chevron_size = 24.0f;  // px
-    float head_offset  = 2.2f;   // meters above feet
 
     // Beam
     float beam_height = 3.0f;    // meters
@@ -56,9 +61,15 @@ struct Config {
     bool  hide_when_unfocused = true;  // hide while GW2 is alt-tabbed / unfocused
 };
 
-// Fitted head height (meters, feet->top-of-head) for a race, incl. the nudge.
-// Unknown race resolves to the Human entry.
+// Race head height (meters, feet->top-of-head). Unknown race resolves to Human.
+// This is the plain race height with NO per-type nudge (used for the glow body).
 float fitted_head_height(const Config& c, core::GameRace race);
+
+// Effective world-height (meters above feet) for each head-anchored element:
+// resolved base (race height when fit is on, else the manual base) plus the
+// element's own nudge. Renderer and options UI share these.
+float effective_pip_height(const Config& c, core::GameRace race);
+float effective_chevron_height(const Config& c, core::GameRace race);
 
 void load_config(Config& c, const char* path);
 void save_config(const Config& c, const char* path);
