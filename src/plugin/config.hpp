@@ -16,7 +16,12 @@ struct Config {
     // Per-mode gates (structured PvP is always off, not configurable).
     bool        show_in_pve = true;
     bool        show_in_wvw = true;
-    MarkerStyle style   = MarkerStyle::GroundRing;
+    // Marker elements — any combination may be drawn at once.
+    bool        show_ring    = true;    // ground ring (default on)
+    bool        show_glow    = false;   // silhouette glow
+    bool        show_chevron = false;   // overhead chevron
+    bool        show_beam    = false;   // vertical beam
+    bool        show_pip     = false;   // head pip
     float       color[3] = {0.16f, 0.92f, 0.78f};   // teal
     float       opacity  = 0.90f;                   // 0..1
 
@@ -25,7 +30,7 @@ struct Config {
     float       outline_color[3] = {1.0f, 1.0f, 1.0f};  // white
     float       outline_width = 2.0f;                   // px
 
-    // Ground ring / Ring + pip
+    // Ground ring
     float ring_radius = 0.6f;    // world radius in meters
 
     // Silhouette glow
