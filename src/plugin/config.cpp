@@ -44,8 +44,6 @@ void draw_options(Config& c, core::GameRace detected) {
             break;
         case MarkerStyle::Chevron:
             ImGui::SliderFloat("Chevron size", &c.chevron_size, 8.0f, 80.0f, "%.0f px");
-            if (!c.fit_height_to_race)
-                ImGui::SliderFloat("Height above (m)", &c.head_offset, 0.0f, 3.5f, "%.2f");
             break;
         case MarkerStyle::Beam:
             ImGui::SliderFloat("Beam height (m)", &c.beam_height, 0.5f, 6.0f, "%.2f");
@@ -56,10 +54,11 @@ void draw_options(Config& c, core::GameRace detected) {
 
     ImGui::Separator();
     ImGui::Checkbox("Fit height to race", &c.fit_height_to_race);
+
+    const char* race_names[5] = { "Asura", "Charr", "Human", "Norn", "Sylvari" };
+    int det = (detected == core::GameRace::Unknown) ? -1 : (int)detected;
+
     if (c.fit_height_to_race) {
-        ImGui::SliderFloat("Height nudge (m)", &c.height_nudge, -1.0f, 1.0f, "%+.2f");
-        const char* race_names[5] = { "Asura", "Charr", "Human", "Norn", "Sylvari" };
-        int det = (detected == core::GameRace::Unknown) ? -1 : (int)detected;
         ImGui::TextDisabled("Head height per race (m)");
         for (int i = 0; i < 5; ++i) {
             if (i == det)
@@ -72,7 +71,20 @@ void draw_options(Config& c, core::GameRace detected) {
             }
         }
         if (det < 0) ImGui::TextDisabled("(race not detected -> using Human)");
+    } else {
+        ImGui::TextDisabled("Manual head-anchor height (m)");
+        ImGui::SliderFloat("Pip base (m)",     &c.pip_manual_m,     0.0f, 3.5f, "%.2f");
+        ImGui::SliderFloat("Chevron base (m)", &c.chevron_manual_m, 0.0f, 3.5f, "%.2f");
     }
+
+    // Per-type adjusters apply in both modes.
+    ImGui::SliderFloat("Pip nudge (m)",     &c.pip_nudge,     -0.5f, 1.5f, "%+.2f");
+    ImGui::SliderFloat("Chevron nudge (m)", &c.chevron_nudge, -0.5f, 1.5f, "%+.2f");
+
+    // Live readout of the resulting height for the detected race (Unknown -> Human).
+    ImGui::TextDisabled("Pip -> %.2f m    Chevron -> %.2f m",
+                        effective_pip_height(c, detected),
+                        effective_chevron_height(c, detected));
 
     ImGui::Separator();
     ImGui::TextUnformatted("Behavior");
