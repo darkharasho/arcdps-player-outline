@@ -10,7 +10,9 @@ void save_config(const Config& c, const char* path) {
     std::fprintf(f, "enabled=%d\n", c.enabled ? 1 : 0);
     std::fprintf(f, "show_in_pve=%d\nshow_in_wvw=%d\n",
                  c.show_in_pve ? 1 : 0, c.show_in_wvw ? 1 : 0);
-    std::fprintf(f, "style=%d\n", (int)c.style);
+    std::fprintf(f, "show_ring=%d\nshow_glow=%d\nshow_chevron=%d\nshow_beam=%d\nshow_pip=%d\n",
+                 c.show_ring ? 1 : 0, c.show_glow ? 1 : 0, c.show_chevron ? 1 : 0,
+                 c.show_beam ? 1 : 0, c.show_pip ? 1 : 0);
     std::fprintf(f, "r=%.4f\ng=%.4f\nb=%.4f\n", c.color[0], c.color[1], c.color[2]);
     std::fprintf(f, "opacity=%.4f\n", c.opacity);
     std::fprintf(f, "outline=%d\noc_r=%.4f\noc_g=%.4f\noc_b=%.4f\noutline_width=%.4f\n",
@@ -45,7 +47,6 @@ static float clampf(float v, float lo, float hi) {
 // Keep loaded values inside their slider ranges. Guards against garbage/stale
 // ini values (e.g. an old pixel radius reused after the field became meters).
 static void sanitize(Config& c) {
-    if ((int)c.style < 0 || (int)c.style > 5) c.style = MarkerStyle::GroundRing;
     for (int i = 0; i < 3; ++i) c.color[i] = clampf(c.color[i], 0.0f, 1.0f);
     for (int i = 0; i < 3; ++i) c.outline_color[i] = clampf(c.outline_color[i], 0.0f, 1.0f);
     c.opacity       = clampf(c.opacity, 0.05f, 1.0f);
@@ -75,11 +76,18 @@ void load_config(Config& c, const char* path) {
     if (!f) return;
     char key[32];
     float v;
+    int  old_style = -1;    // legacy MarkerStyle value, if seen
+    bool saw_show  = false; // any explicit show_* key present?
     while (std::fscanf(f, " %31[^=\n]=%f", key, &v) == 2) {
         if      (!std::strcmp(key, "enabled"))      c.enabled = (v != 0);
         else if (!std::strcmp(key, "show_in_pve"))  c.show_in_pve = (v != 0);
         else if (!std::strcmp(key, "show_in_wvw"))  c.show_in_wvw = (v != 0);
-        else if (!std::strcmp(key, "style"))        c.style = (MarkerStyle)(int)v;
+        else if (!std::strcmp(key, "style"))        old_style = (int)v;
+        else if (!std::strcmp(key, "show_ring"))    { c.show_ring = (v != 0);    saw_show = true; }
+        else if (!std::strcmp(key, "show_glow"))    { c.show_glow = (v != 0);    saw_show = true; }
+        else if (!std::strcmp(key, "show_chevron")) { c.show_chevron = (v != 0); saw_show = true; }
+        else if (!std::strcmp(key, "show_beam"))    { c.show_beam = (v != 0);    saw_show = true; }
+        else if (!std::strcmp(key, "show_pip"))     { c.show_pip = (v != 0);     saw_show = true; }
         else if (!std::strcmp(key, "r"))            c.color[0] = v;
         else if (!std::strcmp(key, "g"))            c.color[1] = v;
         else if (!std::strcmp(key, "b"))            c.color[2] = v;
@@ -115,6 +123,20 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "hide_when_unfocused")) c.hide_when_unfocused = (v != 0);
     }
     std::fclose(f);
+    // Migrate a legacy single-style config only when no explicit element toggles
+    // were present — explicit show_* keys always win.
+    if (!saw_show && old_style >= 0) {
+        c.show_ring = c.show_glow = c.show_chevron = c.show_beam = c.show_pip = false;
+        switch (old_style) {
+            case (int)MarkerStyle::GroundRing:     c.show_ring = true; break;
+            case (int)MarkerStyle::SilhouetteGlow: c.show_glow = true; break;
+            case (int)MarkerStyle::Chevron:        c.show_chevron = true; break;
+            case (int)MarkerStyle::Beam:           c.show_beam = true; break;
+            case (int)MarkerStyle::RingPip:        c.show_ring = true; c.show_pip = true; break;
+            case (int)MarkerStyle::RingChevron:    c.show_ring = true; c.show_chevron = true; break;
+            default:                               c.show_ring = true; break;
+        }
+    }
     sanitize(c);
 }
 

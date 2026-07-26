@@ -8,7 +8,7 @@ TEST_CASE("config save/load round-trips stable fields") {
     const char* path = "test_config_roundtrip.ini";
     Config a;
     a.enabled = false;
-    a.style   = MarkerStyle::RingChevron;
+    a.show_ring = false; a.show_chevron = true;
     a.opacity = 0.42f;
     a.color[0] = 0.10f; a.color[1] = 0.20f; a.color[2] = 0.30f;
     save_config(a, path);
@@ -18,7 +18,8 @@ TEST_CASE("config save/load round-trips stable fields") {
     std::remove(path);
 
     CHECK(b.enabled == false);
-    CHECK(b.style   == MarkerStyle::RingChevron);
+    CHECK(b.show_ring == false);
+    CHECK(b.show_chevron == true);
     CHECK(b.opacity == doctest::Approx(0.42f));
     CHECK(b.color[0] == doctest::Approx(0.10f));
     CHECK(b.color[2] == doctest::Approx(0.30f));
@@ -88,4 +89,61 @@ TEST_CASE("load_config ignores stale height_nudge/head_offset keys without crash
     CHECK(c.enabled == true);
     CHECK(c.pip_nudge == doctest::Approx(0.30f));
     CHECK(c.chevron_manual_m == doctest::Approx(2.40f));
+}
+
+TEST_CASE("show_* element toggles round-trip") {
+    const char* path = "test_config_elements.ini";
+    Config a;
+    a.show_ring = false; a.show_glow = true; a.show_chevron = true;
+    a.show_beam = false; a.show_pip = true;
+    save_config(a, path);
+    Config b;
+    load_config(b, path);
+    std::remove(path);
+    CHECK(b.show_ring == false);
+    CHECK(b.show_glow == true);
+    CHECK(b.show_chevron == true);
+    CHECK(b.show_beam == false);
+    CHECK(b.show_pip == true);
+}
+
+TEST_CASE("legacy style migrates to element set when no show_* keys present") {
+    const char* path = "test_config_migrate.ini";
+    FILE* f = std::fopen(path, "w");
+    std::fprintf(f, "enabled=1\nstyle=4\n");   // 4 = RingPip -> ring + pip
+    std::fclose(f);
+    Config c;
+    load_config(c, path);
+    std::remove(path);
+    CHECK(c.show_ring == true);
+    CHECK(c.show_pip == true);
+    CHECK(c.show_glow == false);
+    CHECK(c.show_chevron == false);
+    CHECK(c.show_beam == false);
+}
+
+TEST_CASE("explicit show_* keys win over a legacy style key") {
+    const char* path = "test_config_precedence.ini";
+    FILE* f = std::fopen(path, "w");
+    // style=1 (glow) would migrate to glow-only, but explicit show_* must win.
+    std::fprintf(f, "style=1\nshow_ring=1\nshow_glow=0\nshow_beam=1\n");
+    std::fclose(f);
+    Config c;
+    load_config(c, path);
+    std::remove(path);
+    CHECK(c.show_ring == true);
+    CHECK(c.show_glow == false);   // NOT migrated on from style=1
+    CHECK(c.show_beam == true);
+}
+
+TEST_CASE("empty ini leaves default element set (ring on)") {
+    const char* path = "test_config_empty.ini";
+    FILE* f = std::fopen(path, "w");
+    std::fclose(f);   // empty file
+    Config c;
+    load_config(c, path);
+    std::remove(path);
+    CHECK(c.show_ring == true);
+    CHECK(c.show_glow == false);
+    CHECK(c.show_pip == false);
 }
