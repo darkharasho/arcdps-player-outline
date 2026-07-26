@@ -128,13 +128,13 @@ void load_config(Config& c, const char* path) {
     if (!saw_show && old_style >= 0) {
         c.show_ring = c.show_glow = c.show_chevron = c.show_beam = c.show_pip = false;
         switch (old_style) {
-            case 0: c.show_ring = true; break;                        // GroundRing
-            case 1: c.show_glow = true; break;                        // SilhouetteGlow
-            case 2: c.show_chevron = true; break;                     // Chevron
-            case 3: c.show_beam = true; break;                        // Beam
-            case 4: c.show_ring = true; c.show_pip = true; break;     // RingPip
-            case 5: c.show_ring = true; c.show_chevron = true; break; // RingChevron
-            default: c.show_ring = true; break;                       // unknown -> ring
+            case (int)MarkerStyle::GroundRing:     c.show_ring = true; break;
+            case (int)MarkerStyle::SilhouetteGlow: c.show_glow = true; break;
+            case (int)MarkerStyle::Chevron:        c.show_chevron = true; break;
+            case (int)MarkerStyle::Beam:           c.show_beam = true; break;
+            case (int)MarkerStyle::RingPip:        c.show_ring = true; c.show_pip = true; break;
+            case (int)MarkerStyle::RingChevron:    c.show_ring = true; c.show_chevron = true; break;
+            default:                               c.show_ring = true; break;
         }
     }
     sanitize(c);
