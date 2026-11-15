@@ -19,6 +19,7 @@
 // ini, so it can sit in the addons folder beside an installed release build
 // without arcdps rejecting it as a duplicate or the two sharing settings.
 #include "replay_tint.hpp"
+#include "update_check.hpp"
 #ifdef PLAYER_OUTLINE_SPIKE
 #define PO_MOD_NAME "player_outline_dev"
 #define PO_INI_NAME "arcdps_player_outline_dev.ini"
@@ -264,7 +265,21 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
     return 0;
 }
 
+static const char* const kReleasesUrl = "https://github.com/darkharasho/arcdps-player-outline/releases";
+
 static uintptr_t options_cb() {
+    const plugin::UpdateStatus up = plugin::update_status();
+    if (up.state == plugin::UpdateState::Available) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f),
+                           "Update available: %s (you have %s)", up.tag, kBuild);
+        ImGui::TextUnformatted(kReleasesUrl + 8);   // without "https://"
+        ImGui::SameLine();
+        if (ImGui::Button("Copy link")) ImGui::SetClipboardText(kReleasesUrl);
+    } else if (up.state == plugin::UpdateState::Failed) {
+        ImGui::TextDisabled("Update check failed");
+    }
+    ImGui::Checkbox("Check for updates on startup", &g_cfg.check_updates);
+    ImGui::Separator();
     plugin::draw_options(g_cfg, g_race);
     ImGui::Separator();
     ImGui::Checkbox("Character outline (experimental)", &g_cfg.body_outline);
@@ -281,6 +296,7 @@ static uintptr_t options_cb() {
 static arcdps_exports* mod_init() {
     resolve_ini_path();
     if (g_ini[0]) plugin::load_config(g_cfg, g_ini);
+    if (g_cfg.check_updates) plugin::start_update_check(kBuild);
 #ifndef PLAYER_OUTLINE_SPIKE
     spike::install(g_swapchain, nullptr);   // no log file in release builds
 #else

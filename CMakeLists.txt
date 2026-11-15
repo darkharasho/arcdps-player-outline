@@ -37,6 +37,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         src/core/mumble_data.cpp
         src/core/camera.cpp
         src/spike/replay_tint.cpp
+        src/plugin/update_check.cpp
         ${IMGUI_SRC})
     if(PLAYER_OUTLINE_SPIKE)
         set(PLUGIN_OUTPUT_NAME "arcdps_player_outline_dev")
@@ -49,7 +50,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         third_party/imgui third_party/arcdps src/core src/spike)
     target_compile_definitions(arcdps_player_outline PRIVATE
         PLUGIN_VERSION="${PLUGIN_VERSION}")
-    target_link_libraries(arcdps_player_outline PRIVATE d3d11 dxgi)
+    target_link_libraries(arcdps_player_outline PRIVATE d3d11 dxgi winhttp)
     if(PLAYER_OUTLINE_SPIKE)
         target_compile_definitions(arcdps_player_outline PRIVATE PLAYER_OUTLINE_SPIKE)
     endif()

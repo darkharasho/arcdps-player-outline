@@ -147,3 +147,25 @@ TEST_CASE("empty ini leaves default element set (ring on)") {
     CHECK(c.show_glow == false);
     CHECK(c.show_pip == false);
 }
+
+TEST_CASE("check_updates round-trips and defaults to on") {
+    const char* path = "test_config_updates.ini";
+    Config a;
+    CHECK(a.check_updates == true);
+    a.check_updates = false;
+    save_config(a, path);
+    Config b;
+    load_config(b, path);
+    std::remove(path);
+    CHECK_FALSE(b.check_updates);
+
+    // An ini written by an older version has no such key: stays on.
+    FILE* f = std::fopen(path, "w");
+    REQUIRE(f != nullptr);
+    std::fputs("enabled=1\n", f);
+    std::fclose(f);
+    Config c;
+    load_config(c, path);
+    std::remove(path);
+    CHECK(c.check_updates == true);
+}

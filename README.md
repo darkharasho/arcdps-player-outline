@@ -27,6 +27,7 @@ It marks *only you*. It does **not** outline other players/NPCs and does **not**
 - **Off-screen arrow** — a screen-edge arrow points to you when the camera is turned away.
 - **Auto-hide** — hides while the full-screen map is open or the game is alt-tabbed (both toggleable), and respects arcdps's own UI-hide key.
 - **Live config** — full options panel (color, opacity, per-element sliders) with settings saved to an ini next to the DLL.
+- **Update notice** — the options panel tells you when a newer release is out. It only notifies; it never downloads or installs anything.
 - **Cross-platform** — a native Windows DLL that also runs under **Proton/Wine** on Linux.
 
 ## Install
@@ -57,6 +58,7 @@ PLAYER_OUTLINE_DEPLOY_DEST="/path/to/Guild Wars 2/addons/arcdps_player_outline.d
 
 In the options panel:
 
+- **Check for updates on startup** — once per launch the plugin makes one anonymous request to github.com to see which release is the latest, and shows a notice with the link here if yours is older. Untick it to make no request at all.
 - **Show self marker** — master toggle for the marker.
 - **Game modes** — show the marker in PvE, WvW, or both.
 - **Marker elements** — tick any of Ground ring, Silhouette glow, Overhead chevron, Beam and Head pip. Each enabled element shows its own size/shape sliders.

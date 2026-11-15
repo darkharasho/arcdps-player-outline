@@ -8,6 +8,7 @@ void save_config(const Config& c, const char* path) {
     FILE* f = std::fopen(path, "w");
     if (!f) return;
     std::fprintf(f, "enabled=%d\n", c.enabled ? 1 : 0);
+    std::fprintf(f, "check_updates=%d\n", c.check_updates ? 1 : 0);
     std::fprintf(f, "show_in_pve=%d\nshow_in_wvw=%d\n",
                  c.show_in_pve ? 1 : 0, c.show_in_wvw ? 1 : 0);
     std::fprintf(f, "show_ring=%d\nshow_glow=%d\nshow_chevron=%d\nshow_beam=%d\nshow_pip=%d\n",
@@ -104,6 +105,7 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "oc_b"))         c.outline_color[2] = v;
         else if (!std::strcmp(key, "outline_width")) c.outline_width = v;
         else if (!std::strcmp(key, "body_outline"))   c.body_outline = (v != 0);
+        else if (!std::strcmp(key, "check_updates"))  c.check_updates = (v != 0);
         else if (!std::strcmp(key, "bc_r"))           c.body_color[0] = v;
         else if (!std::strcmp(key, "bc_g"))           c.body_color[1] = v;
         else if (!std::strcmp(key, "bc_b"))           c.body_color[2] = v;

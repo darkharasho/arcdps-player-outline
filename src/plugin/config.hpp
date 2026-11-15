@@ -13,6 +13,8 @@ enum class MarkerStyle {
 
 struct Config {
     bool        enabled = true;
+    // Ask GitHub once per launch whether a newer release exists (notice only).
+    bool        check_updates = true;
     // Character outline: a see-through silhouette of your own character, drawn
     // by re-rendering its meshes. Off unless switched on.
     bool        body_outline   = false;
