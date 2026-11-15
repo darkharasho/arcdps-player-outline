@@ -442,7 +442,34 @@ unsigned long long g_last_tick = 0;
 int g_rej_range = 0, g_rej_order = 0, g_lost_tf = 0, g_diag_lines = 0;   // probe 3r diagnostics
 constexpr float kForeignDist = 1.5f;           // an unknown mesh with no copy this close is someone else's
 bool g_nearest = true;                         // of several copies of a mesh, outline the nearest only
+constexpr float kPass2Slack = 0.75f;           // metres a second-pass copy may be farther than the first-pass one
 constexpr int kMaxLock = 512, kMaxPend = 128, kLearnFrames = 60;
+// A big character's own pieces (charr tail, head, arms) measure well over
+// g_tf_radius from the avatar for much of the time while moving, and used to
+// count as someone else's and hold learning up. A mesh that has stayed inside
+// the ring without a break for kStayFrames and was within g_tf_radius in at
+// least 1 frame in kStayShare of them is taken to be ours: a passer-by does not
+// stay, and a bystander never gets that close.
+struct Stay { uint64_t mk; int start, last, in_frames, last_in; };
+constexpr int kMaxStay = 256, kStayFrames = 120, kStayGap = 5, kStayShare = 20;
+Stay g_stay[kMaxStay];
+int g_n_stay = 0;
+bool g_long_body = false;   // charr: the only race this rule is used for
+unsigned g_far_frame = 0;
+bool stays_with_us(uint64_t mk, bool inside) {
+    const int f = (int)g_far_frame;
+    Stay* e = nullptr;
+    for (int i = 0; i < g_n_stay; ++i) if (g_stay[i].mk == mk) { e = &g_stay[i]; break; }
+    if (!e) {
+        if (g_n_stay < kMaxStay) e = &g_stay[g_n_stay++];
+        else { e = &g_stay[0]; for (int i = 1; i < kMaxStay; ++i) if (g_stay[i].last < e->last) e = &g_stay[i]; }
+        *e = Stay{mk, f, f, 0, -1};
+    } else if (f - e->last > kStayGap) { e->start = f; e->in_frames = 0; e->last_in = -1; }
+    e->last = f;
+    if (inside && e->last_in != f) { ++e->in_frames; e->last_in = f; }
+    const int span = f - e->start;
+    return g_long_body && span >= kStayFrames && e->in_frames * kStayShare >= span;
+}
 // Diagnostic: where each not-yet-known mesh was seen while waiting to be
 // learned, so the log can say whether our own pieces held learning up.
 struct SeenStat { uint64_t mk; int n_in, n_out; float maxd; };
@@ -520,7 +547,6 @@ struct FarStreak {
     void reset(uint64_t v) { const int i = slot(v, false); if (i >= 0) c[i] = 0; }
 };
 FarStreak g_far_streak;
-unsigned g_far_frame = 0;
 constexpr int kForeignFrames = 45;
 constexpr int kMaxFar = 1024;
 uint64_t g_far[kMaxFar];
@@ -766,7 +792,11 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                             const int i2 = lm->n2++;
                             // With several copies the first pass has already
                             // picked ours; nothing is added here.
-                            accept = d <= g_lock_radius && (!g_nearest || lm->n1 <= 1);
+                            // A copy drawn with other shaders or textures lands here
+                            // too (another charr with the same eyes or face): it is
+                            // ours only if it is about as near as our first-pass copy.
+                            accept = d <= g_lock_radius && (!g_nearest || lm->n1 <= 1) &&
+                                     (lm->n1 == 0 || d <= lm->cur + kPass2Slack);
                             if (!accept) {
                                 ++g_p2_rej;
                                 if (d > g_lock_radius) ++g_rej_range; else ++g_rej_order;
@@ -782,14 +812,18 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                         if (foreign) {
                             accept = false;
                             if (d <= g_ring_radius) ++g_foreign_near;
-                        } else if (d <= g_tf_radius) {
-                            note_seen(mk, d, true);
-                            bool have = false;
-                            for (int i = 0; i < g_n_pend; ++i) if (g_pend[i] == mk) { have = true; break; }
-                            if (!have && g_n_pend < kMaxPend) g_pend[g_n_pend++] = mk;
                         } else if (d <= g_ring_radius) {
-                            note_seen(mk, d, false);
-                            ++g_ring;
+                            const bool inside = d <= g_tf_radius;
+                            note_seen(mk, d, inside);
+                            const bool ours = stays_with_us(mk, inside);
+                            if (inside || ours) {
+                                bool have = false;
+                                for (int i = 0; i < g_n_pend; ++i) if (g_pend[i] == mk) { have = true; break; }
+                                if (!have && g_n_pend < kMaxPend) g_pend[g_n_pend++] = mk;
+                                if (ours) accept = true;
+                            } else {
+                                ++g_ring;
+                            }
                         }
                         if (g_n_lock > 0) accept = false;
                     }
@@ -1114,7 +1148,7 @@ const char* module_of(void* addr) {
 }
 
 // Once a frame: the context may have moved to another vtable, or something may
-// have written over our slots. Hook again and say so in the log.
+// have written over our slots. A new vtable is hooked; lost slots are logged.
 void ensure_hooks() {
     if (!g_ctx || g_n_vt == 0) return;
     void** cur = *reinterpret_cast<void***>(g_ctx);
@@ -1125,16 +1159,24 @@ void ensure_hooks() {
         if (g_vt_logs < 40) { ++g_vt_logs;
             log_line("# context vtable changed to %p: hooked %d slots, %d vtables known", (void*)cur, n, g_n_vt); }
     }
-    for (int i = 0; i < g_n_vt; ++i) {
-        void* was = g_vts[i].vt[kDrawIndexedSlot];
-        const int n = hook_vtable(g_vts[i].vt);
-        if (n > 0) {
-            g_rehooked += n;
+    // A slot someone else wrote over is reported, not taken back: if their hook
+    // calls ours and ours is made to call theirs, the two recurse until the
+    // stack runs out, and two addons each restoring their own hook never settle.
+    static const int kSlots[] = {kDrawIndexedSlot, kDrawIndexedInstancedSlot, kMapSlot, kUnmapSlot,
+                                 kUpdateSubresourceSlot};
+    static void* const kFns[] = {(void*)&hk_DrawIndexed, (void*)&hk_DrawIndexedInstanced, (void*)&hk_Map,
+                                 (void*)&hk_Unmap, (void*)&hk_UpdateSubresource};
+    int lost = 0;
+    for (int i = 0; i < g_n_vt; ++i)
+        for (int k = 0; k < 5; ++k) {
+            void* now = g_vts[i].vt[kSlots[k]];
+            if (now == kFns[k]) continue;
+            ++lost;
             if (g_vt_logs < 40) { ++g_vt_logs;
-                log_line("# hooks were overwritten on vtable %p: restored %d slots (DrawIndexed was %p in %s)",
-                         (void*)g_vts[i].vt, n, was, module_of(was)); }
+                log_line("# hook slot %d on vtable %p now holds %p in %s (not ours, left alone)",
+                         kSlots[k], (void*)g_vts[i].vt, now, module_of(now)); }
         }
-    }
+    g_rehooked = lost;
 }
 
 // Compiles the pixel shader and creates the buffer and blend state. Any
@@ -1274,15 +1316,6 @@ bool install(void* swapchain, const char* log_path) {
     g_orig_map = g_vts[0].map; g_orig_unmap = g_vts[0].unmap; g_orig_update = g_vts[0].upd;
     log_line("# context vtable %p in %s; DrawIndexed original %p in %s", (void*)g_vtbl, module_of(g_vtbl),
              (void*)g_orig, module_of((void*)g_orig));
-    {
-        ID3D11DeviceContext* dc = nullptr;
-        if (SUCCEEDED(g_dev->CreateDeferredContext(0, &dc)) && dc) {
-            void** dv = *reinterpret_cast<void***>(dc);
-            log_line("# deferred context vtable %p (%s), DrawIndexed %p", (void*)dv,
-                     dv == g_vtbl ? "same as immediate" : "different", dv[kDrawIndexedSlot]);
-            dc->Release();
-        }
-    }
     {   // Why no draws might reach the hooks: the game recording on deferred contexts.
         D3D11_FEATURE_DATA_THREADING th{};
         const HRESULT hr = g_dev->CheckFeatureSupport(D3D11_FEATURE_THREADING, &th, sizeof(th));
@@ -1455,7 +1488,7 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     {   // Probe 3r: say why nothing is being learned, every ~5 s.
         static int tick = 0;
         if (++tick >= 300) { tick = 0;
-            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, re-hooked %d | %s",
+            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, hook slots lost %d | %s",
                      g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_n_vt, g_rehooked, g_summary); g_other_draws = 0; }
     }
     g_p2_rej = 0; g_rej_range = 0; g_rej_order = 0; g_lost_tf = 0;
@@ -1495,9 +1528,10 @@ bool*  gear_lock() { return &g_lock_on; }
 float* gear_radius() { return &g_lock_radius; }
 float* learn_range() { return &g_ring_radius; }
 void set_mounted(bool m) { g_mounted = m; }
+void set_long_body(bool b) { g_long_body = b; }
 void set_log_limit(int lines) { g_log_limit = lines; }
 void forget_gear() {
-    g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear(); g_n_seen = 0;
+    g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear(); g_n_seen = 0; g_n_stay = 0;
 }
 // A new map reloads every model, and another character wears other gear:
 // either way every mesh id we hold is stale.

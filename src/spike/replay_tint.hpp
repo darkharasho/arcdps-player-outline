@@ -42,6 +42,7 @@ float* learn_range();      // metres; another skinned draw this close blocks lea
 void forget_gear();
 void set_map(unsigned id, unsigned who);   // map id and character-name hash; a change forgets the gear
 void set_log_limit(int lines);     // stop writing the log after this many lines (0 = never)
+void set_long_body(bool on);   // charr: own pieces range far from the avatar point
 void set_mounted(bool mounted);   // while mounted nothing is learned, marked or dropped
 bool*  nearest_only();     // of several copies of a learned mesh, outline the nearest only
 bool*  rigid_pieces();     // let rigid pieces that carry a transform take part
