@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include "imgui.h"
 #include "arcdps.h"
 #include "mumble_link.hpp"
@@ -14,8 +15,22 @@
 #define PLUGIN_VERSION "0.0.0-dev"
 #endif
 
+// The spike build is a wholly separate addon: its own file name, arcdps sig and
+// ini, so it can sit in the addons folder beside an installed release build
+// without arcdps rejecting it as a duplicate or the two sharing settings.
+#ifdef PLAYER_OUTLINE_SPIKE
+#include "replay_tint.hpp"
+#define PO_MOD_NAME "player_outline_dev"
+#define PO_INI_NAME "arcdps_player_outline_dev.ini"
+#define PO_SIG      0x504F4C45
+#else
+#define PO_MOD_NAME "player_outline"
+#define PO_INI_NAME "arcdps_player_outline.ini"
+#define PO_SIG      0x504F4C4E
+#endif
+
 static arcdps_exports g_arc{};
-static const char* kName  = "player_outline";
+static const char* kName  = PO_MOD_NAME;
 static const char* kBuild = PLUGIN_VERSION;   // injected from the git tag at build time
 static plugin::MumbleReader g_reader;
 static plugin::Config g_cfg;
@@ -23,6 +38,7 @@ static core::GameRace g_race = core::GameRace::Unknown;   // last sampled race (
 static core::OneEuro g_fx, g_fy, g_fh;   // smooth anchor x/y and body height (px)
 static HMODULE g_self = nullptr;
 static char g_ini[MAX_PATH] = {0};
+static void* g_swapchain = nullptr;
 
 static void reset_smoothing() { g_fx.reset(); g_fy.reset(); g_fh.reset(); }
 
@@ -33,7 +49,7 @@ static void resolve_ini_path() {
     char* slash = std::strrchr(g_ini, '\\');
     if (!slash) slash = std::strrchr(g_ini, '/');
     char* tail = slash ? slash + 1 : g_ini;
-    std::strncpy(tail, "arcdps_player_outline.ini",
+    std::strncpy(tail, PO_INI_NAME,
                  (size_t)(g_ini + MAX_PATH - tail - 1));
     g_ini[MAX_PATH - 1] = 0;
 }
@@ -63,11 +79,67 @@ static bool build_ground_ring(const core::AvatarState& avatar, const core::Camer
 // called each frame by arcdps; not_charsel_or_loading==1 when safe to draw,
 // hide==1 when arcdps has hidden its UI (its own hide key).
 static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
-    if (!not_charsel_or_loading || hide || !g_cfg.enabled) { reset_smoothing(); return 0; }
+#ifdef PLAYER_OUTLINE_SPIKE
+    // The scanner must still run with the marker switched off, so the "enabled"
+    // gate moves below the spike block in this build.
+    constexpr bool kGateOnEnabled = false;
+#else
+    constexpr bool kGateOnEnabled = true;
+#endif
+    if (!not_charsel_or_loading || hide || (kGateOnEnabled && !g_cfg.enabled)) {
+        reset_smoothing();
+        return 0;
+    }
 
     core::AvatarState avatar; core::CameraState cam; plugin::SessionInfo session;
     if (!g_reader.sample(avatar, cam, session)) { reset_smoothing(); return 0; }
     g_race = session.race;   // cache for the options panel to highlight
+
+#ifdef PLAYER_OUTLINE_SPIKE
+    // Runs on the render thread, same as the draw hooks, so plain assignments
+    // are enough to hand the probe this frame's camera and avatar.
+    {
+        ImVec2 ssz = ImGui::GetIO().DisplaySize;
+        spike::set_mounted(session.mounted);
+        spike::set_frame(avatar.position, cam, ssz.x, ssz.y);
+        // Mouse-driven controls: the probe does no keyboard polling at all.
+        ImGui::SetNextWindowPos(ImVec2(12.0f, 36.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("player outline probe 3r", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing)) {
+            ImGui::Checkbox("Outline", spike::outline_flag());
+            ImGui::ColorEdit3("Colour", spike::outline_rgb(), ImGuiColorEditFlags_NoInputs);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Thickness (px)", spike::thickness(), 1.0f, 8.0f, "%.0f", ImGuiSliderFlags_NoInput);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Fill", spike::fill(), 0.0f, 0.6f, "%.2f", ImGuiSliderFlags_NoInput);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Radius (m)", spike::radius(), 0.15f, 1.5f, "%.2f", ImGuiSliderFlags_NoInput);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Height (m)", spike::height(), 0.5f, 4.0f, "%.2f", ImGuiSliderFlags_NoInput);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Mask margin (m)", spike::margin(), 0.0f, 3.0f, "%.1f", ImGuiSliderFlags_NoInput);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Learn at % inside", spike::learn_pct(), 20.0f, 100.0f, "%.0f", ImGuiSliderFlags_NoInput);
+            ImGui::Checkbox("Use model position", spike::use_transforms());
+            ImGui::Checkbox("Body and armour only", spike::body_only());
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Model distance (m)", spike::transform_radius(), 0.1f, 2.0f, "%.2f", ImGuiSliderFlags_NoInput);
+            ImGui::Checkbox("Include rigid pieces", spike::rigid_pieces());
+            ImGui::Checkbox("Lock to my gear", spike::gear_lock());
+            ImGui::Checkbox("Nearest copy only", spike::nearest_only());
+            ImGui::SameLine(); if (ImGui::Button("Forget gear")) spike::forget_gear();
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Known gear distance (m)", spike::gear_radius(), 0.5f, 6.0f, "%.1f", ImGuiSliderFlags_NoInput);
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::SliderFloat("Learn when alone within (m)", spike::learn_range(), 1.0f, 8.0f, "%.1f", ImGuiSliderFlags_NoInput);
+            if (ImGui::Button("Log draws")) spike::log_learned();
+            ImGui::SameLine(); ImGui::Text("logged %d", spike::detail_count());
+            ImGui::TextUnformatted(spike::dump_status());
+            ImGui::TextUnformatted(spike::last_summary());
+        }
+        ImGui::End();
+    }
+    if (!g_cfg.enabled) { reset_smoothing(); return 0; }
+#endif
 
     // Hide over the full-screen map / when alt-tabbed, per the user's toggles.
     if ((g_cfg.hide_when_map_open && session.map_open) ||
@@ -192,8 +264,17 @@ static uintptr_t options_cb() { plugin::draw_options(g_cfg, g_race); return 0; }
 static arcdps_exports* mod_init() {
     resolve_ini_path();
     if (g_ini[0]) plugin::load_config(g_cfg, g_ini);
+#ifdef PLAYER_OUTLINE_SPIKE
+    {
+        char log[MAX_PATH];
+        std::snprintf(log, MAX_PATH, "%s", g_ini);
+        char* dot = std::strrchr(log, '.');
+        if (dot) std::strncpy(dot, "_scan.log", (size_t)(log + MAX_PATH - dot - 1));
+        spike::install(g_swapchain, log);
+    }
+#endif
     g_arc.size = sizeof(arcdps_exports);
-    g_arc.sig = 0x504F4C4E;
+    g_arc.sig = PO_SIG;
     g_arc.imguivers = IMGUI_VERSION_NUM;
     g_arc.out_name = kName;
     g_arc.out_build = kBuild;
@@ -202,14 +283,18 @@ static arcdps_exports* mod_init() {
     return &g_arc;
 }
 static uintptr_t mod_release() {
+#ifdef PLAYER_OUTLINE_SPIKE
+    spike::shutdown();
+#endif
     if (g_ini[0]) plugin::save_config(g_cfg, g_ini);
     return 0;
 }
 
 extern "C" __declspec(dllexport)
-void* get_init_addr(char* /*arcversion*/, void* imguictx, void* /*id3dptr*/,
+void* get_init_addr(char* /*arcversion*/, void* imguictx, void* id3dptr,
                     HMODULE /*arcdll*/, void* mallocfn, void* freefn,
                     uint32_t /*d3dversion*/) {
+    g_swapchain = id3dptr;
     ImGui::SetCurrentContext((ImGuiContext*)imguictx);
     ImGui::SetAllocatorFunctions(
         (void*(*)(size_t,void*))mallocfn, (void(*)(void*,void*))freefn);

@@ -8,6 +8,7 @@ struct SessionInfo {
     core::GameRace race = core::GameRace::Unknown;
     bool map_open = false;   // full-screen world map is up
     bool focused  = true;    // GW2 window has focus
+    bool mounted  = false;   // MumbleContext mountIndex != 0
 };
 
 // Reads GW2's live MumbleLink block by scanning our own process address space.

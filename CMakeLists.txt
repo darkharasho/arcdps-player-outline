@@ -21,6 +21,11 @@ if(GIT_FOUND)
 endif()
 message(STATUS "player_outline version: ${PLUGIN_VERSION}")
 
+# Throwaway spike build: adds the DrawIndexed constant-buffer scanner and
+# renames the whole addon (file, arcdps sig, ini) so it can be installed next to
+# a release build without colliding with it.
+option(PLAYER_OUTLINE_SPIKE "Build the dev draw-call scanner DLL" OFF)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     file(GLOB IMGUI_SRC third_party/imgui/*.cpp)
     add_library(arcdps_player_outline SHARED
@@ -32,12 +37,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         src/core/mumble_data.cpp
         src/core/camera.cpp
         ${IMGUI_SRC})
+    if(PLAYER_OUTLINE_SPIKE)
+        target_sources(arcdps_player_outline PRIVATE src/spike/replay_tint.cpp)
+        set(PLUGIN_OUTPUT_NAME "arcdps_player_outline_dev")
+    else()
+        set(PLUGIN_OUTPUT_NAME "arcdps_player_outline")
+    endif()
     set_target_properties(arcdps_player_outline PROPERTIES
-        PREFIX "" OUTPUT_NAME "arcdps_player_outline")
+        PREFIX "" OUTPUT_NAME "${PLUGIN_OUTPUT_NAME}")
     target_include_directories(arcdps_player_outline PRIVATE
-        third_party/imgui third_party/arcdps src/core)
+        third_party/imgui third_party/arcdps src/core src/spike)
     target_compile_definitions(arcdps_player_outline PRIVATE
         PLUGIN_VERSION="${PLUGIN_VERSION}")
+    if(PLAYER_OUTLINE_SPIKE)
+        target_compile_definitions(arcdps_player_outline PRIVATE PLAYER_OUTLINE_SPIKE)
+        target_link_libraries(arcdps_player_outline PRIVATE d3d11 dxgi)
+    endif()
     target_link_options(arcdps_player_outline PRIVATE
         -static -static-libgcc -static-libstdc++)
 else()
@@ -49,11 +64,13 @@ else()
         tests/core/test_camera.cpp
         tests/core/test_one_euro.cpp
         tests/core/test_config.cpp
+        tests/core/test_cb_scan.cpp
+        tests/core/test_fingerprint.cpp
         src/plugin/config_io.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp)
     target_include_directories(core_tests PRIVATE
-        third_party/doctest src/core src/plugin)
+        third_party/doctest src/core src/plugin src/spike)
     enable_testing()
     add_test(NAME core_tests COMMAND core_tests)
 endif()
