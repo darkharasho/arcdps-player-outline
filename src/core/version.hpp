@@ -41,10 +41,13 @@ inline bool parse_version(const char* s, int out[3]) {
     return true;
 }
 
-// True only when both versions parse and remote is strictly higher.
+// True only when both versions parse, local is a real version, and remote is
+// strictly higher.
 inline bool is_newer(const char* remote, const char* local) {
     int r[3], l[3];
     if (!parse_version(remote, r) || !parse_version(local, l)) return false;
+    // 0.0.0 is the fallback of a build made without git: version unknown.
+    if (l[0] == 0 && l[1] == 0 && l[2] == 0) return false;
     for (int i = 0; i < 3; ++i)
         if (r[i] != l[i]) return r[i] > l[i];
     return false;

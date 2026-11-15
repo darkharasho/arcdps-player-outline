@@ -29,4 +29,7 @@ TEST_CASE("is_newer") {
     CHECK_FALSE(core::is_newer("v1", "0.4.3"));
     CHECK_FALSE(core::is_newer("v0.4.4", ""));
     CHECK_FALSE(core::is_newer(nullptr, "0.4.3"));
+    // Built without git: the version is unknown, so say nothing.
+    CHECK_FALSE(core::is_newer("v0.4.3", "0.0.0-dev"));
+    CHECK_FALSE(core::is_newer("v0.4.3", "0.0.0"));
 }
