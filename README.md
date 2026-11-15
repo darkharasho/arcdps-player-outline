@@ -70,6 +70,10 @@ Everything applies live; settings persist to `arcdps_player_outline.ini` on exit
 
 ## Character outline (experimental)
 
+| On your own | In a crowd |
+| --- | --- |
+| ![Character outline on a single character](docs/images/outline-solo.png) | ![Character outline visible through a crowd of players](docs/images/outline-crowd.png) |
+
 Tick **Character outline (experimental)** at the bottom of the options panel. It is off by default and works independently of the marker, so you can run either or both. Like the marker, it is off in structured PvP.
 
 - **Color / thickness / fill** — the outline colour, its width in pixels, and how strongly the inside of the silhouette is tinted.
