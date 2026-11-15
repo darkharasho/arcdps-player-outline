@@ -104,7 +104,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
         for (int i = 0; i < 3; ++i) spike::outline_rgb()[i] = g_cfg.body_color[i];
 #endif
         spike::set_mounted(session.mounted);
-        spike::set_map(session.map_id);
+        spike::set_map(session.map_id, session.char_id);
         spike::set_frame(avatar.position, cam, ssz.x, ssz.y);
     }
 #ifdef PLAYER_OUTLINE_SPIKE

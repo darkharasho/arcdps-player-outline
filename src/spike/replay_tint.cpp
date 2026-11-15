@@ -187,6 +187,7 @@ float g_bb_w = 0.0f, g_bb_h = 0.0f;
 ULONGLONG g_frame_ms = 0;          // when set_frame last ran
 
 float g_radius = 0.6f;
+constexpr float kDropGrow = 1.0f;   // extra cylinder radius for the "walked off" check
 float g_above  = 2.7f;
 int   g_skipped_blend = 0;
 bool g_in_hook = false;
@@ -420,6 +421,8 @@ bool g_mounted = false;
 // position jumps or frames stop coming (waypoint, portal, loading screen) the
 // drawn character and the reported position disagree for a while.
 int g_settle = 0;
+int g_other_draws = 0;   // draws seen on a context that is not the immediate one
+unsigned g_map_id = 0, g_char_id = 0;
 unsigned long long g_last_tick = 0;
 int g_rej_range = 0, g_rej_order = 0, g_lost_tf = 0, g_diag_lines = 0;   // probe 3r diagnostics
 constexpr float kForeignDist = 1.5f;           // an unknown mesh with no copy this close is someone else's
@@ -610,7 +613,8 @@ bool is_mine(uint64_t key) {
 // through.
 void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 UINT instances, UINT start, INT base, UINT start_inst) {
-    if (ctx != g_ctx || g_in_hook) return;
+    if (ctx != g_ctx) { ++g_other_draws; return; }
+    if (g_in_hook) return;
     ++g_draws;
     if (!g_ready || !g_outline || count < kMinIndices || instances != 1) return;
     if (GetTickCount64() - g_frame_ms > 250) return;
@@ -683,6 +687,7 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
         const bool lock_mode = body_only && g_lock_on;
         bool accept = !body_only && is_mine(key);
         bool want_sample = !body_only;
+        bool known_notf = false;   // a learned piece without a transform
         bool tight = false;   // piece with no transform: clip its mask close to the avatar
         bool roomy = false;   // piece with no transform, only copy on screen: wide clip
         bool sure = false;    // identified by its own position or as the only copy: no mask clip
@@ -781,6 +786,7 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 // Known pieces of this kind keep being sampled: one that is on
                 // screen but nowhere inside our cylinder belongs to someone else.
                 want_sample = !lm || lm->notf;
+                known_notf = lm && lm->notf;
                 // A known mesh whose transform could not be read this time is
                 // still drawn; the mask cylinder keeps distant copies out.
                 if (lm && !lm->notf) ++g_lost_tf;
@@ -822,6 +828,10 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                     ctx->PSSetShader(g_ps_count, nullptr, 0);
                     ctx->OMSetBlendState(g_blend_none, factor, 0xffffffff);
 
+                    // A piece already learned is only being checked for having
+                    // walked off with someone else. Use a wide cylinder for that:
+                    // a charr's head and tail sit outside the learning one.
+                    if (known_notf) upload_params(ctx, vp, white, kDropGrow);
                     ctx->OMSetDepthStencilState(g_ds_always, 0);
                     ctx->Begin(sm.q_all);
                     if (instanced) g_orig_dii(ctx, count, 1, start, base, start_inst);
@@ -1181,6 +1191,13 @@ bool install(void* swapchain, const char* log_path) {
         g_orig_unmap = nullptr;
     if (!patch_slot(kUpdateSubresourceSlot, (void*)&hk_UpdateSubresource, (void**)&g_orig_update))
         g_orig_update = nullptr;
+    {   // Why no draws might reach the hooks: the game recording on deferred contexts.
+        D3D11_FEATURE_DATA_THREADING th{};
+        const HRESULT hr = g_dev->CheckFeatureSupport(D3D11_FEATURE_THREADING, &th, sizeof(th));
+        log_line("# device: feature level %x, driver command lists %d, concurrent creates %d (hr %lx), context type %d",
+                 (unsigned)g_dev->GetFeatureLevel(), (int)th.DriverCommandLists, (int)th.DriverConcurrentCreates,
+                 (unsigned long)hr, (int)g_ctx->GetType());
+    }
     log_line("# probe 3r hooks: map %d unmap %d update %d", g_orig_map ? 1 : 0,
              g_orig_unmap ? 1 : 0, g_orig_update ? 1 : 0);
     std::snprintf(g_summary, sizeof(g_summary), "probe 3: installed, waiting for MumbleLink");
@@ -1329,8 +1346,8 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     {   // Probe 3r: say why nothing is being learned, every ~5 s.
         static int tick = 0;
         if (++tick >= 300) { tick = 0;
-            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d",
-                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted); }
+            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d | %s",
+                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_summary); g_other_draws = 0; }
     }
     g_p2_rej = 0; g_rej_range = 0; g_rej_order = 0; g_lost_tf = 0;
     g_last_ring = g_ring; g_n_pend = 0; g_ring = 0; g_foreign_near = 0;
@@ -1373,12 +1390,17 @@ void set_log_limit(int lines) { g_log_limit = lines; }
 void forget_gear() {
     g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear();
 }
-// A new map reloads every model, so every mesh id we hold is stale.
-void set_map(unsigned id) {
-    static unsigned last = 0;
-    if (id == last) return;
-    if (last != 0 && id != 0) { forget_gear(); g_settle = 120; log_line("# map %u -> %u: gear forgotten", last, id); }
-    if (id != 0) last = id;
+// A new map reloads every model, and another character wears other gear:
+// either way every mesh id we hold is stale.
+void set_map(unsigned id, unsigned who) {
+    if (id == 0 || who == 0) return;
+    if (id == g_map_id && who == g_char_id) return;
+    if (g_map_id != 0) {
+        forget_gear(); g_settle = 120;
+        log_line("# %s: gear forgotten (map %u -> %u)", who != g_char_id ? "character changed" : "map changed",
+                 g_map_id, id);
+    }
+    g_map_id = id; g_char_id = who;
 }
 bool*  rigid_pieces() { return &g_rigid; }
 bool*  nearest_only() { return &g_nearest; }

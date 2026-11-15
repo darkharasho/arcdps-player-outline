@@ -40,7 +40,7 @@ bool*  gear_lock();        // only outline meshes learned while nobody else was 
 float* gear_radius();      // metres a learned mesh may be from the avatar
 float* learn_range();      // metres; another skinned draw this close blocks learning
 void forget_gear();
-void set_map(unsigned id);       // map id from MumbleLink; a change forgets the gear
+void set_map(unsigned id, unsigned who);   // map id and character-name hash; a change forgets the gear
 void set_log_limit(int lines);     // stop writing the log after this many lines (0 = never)
 void set_mounted(bool mounted);   // while mounted nothing is learned, marked or dropped
 bool*  nearest_only();     // of several copies of a learned mesh, outline the nearest only

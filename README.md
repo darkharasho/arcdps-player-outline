@@ -86,7 +86,7 @@ Tick **Character outline (experimental)** at the bottom of the options panel. It
 - Body and armour only. Weapons are left out, and your mount is not outlined (only the rider).
 - A player of the same race standing on your exact spot can get their identical head piece outlined.
 - A cape can be cut short while another player wearing the same cape is on screen.
-- Gear is re-learned every time the game starts and after every map change.
+- Gear is re-learned every time the game starts, after every map change and when you switch character.
 - A short event log is written to `arcdps_player_outline.log` next to the DLL (overwritten each launch); attach it to bug reports.
 
 > **Use at your own risk.** Unlike the marker, which only reads MumbleLink and draws an overlay, the character outline hooks the game's DirectX 11 draw calls and re-renders your character's meshes. That goes beyond what arcdps addons are clearly allowed to do under ArenaNet's rules. It only ever highlights your own character, but ArenaNet has not approved it and the risk to your account is yours.

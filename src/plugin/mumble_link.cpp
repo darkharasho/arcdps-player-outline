@@ -89,6 +89,14 @@ bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam,
     session.map_open = core::ui_map_open(ui);
     session.focused  = core::ui_game_focused(ui);
     std::memcpy(&session.map_id, &lm.context[28], sizeof(session.map_id));   // after serverAddress[28]
+    {   // FNV-1a of the identity's "name" value; never 0.
+        unsigned h = 2166136261u;
+        if (const char* k = std::strstr(utf8, "\"name\"")) {
+            const char* q = std::strchr(k + 6, '"');
+            for (const char* c = q ? q + 1 : nullptr; c && *c && *c != '"'; ++c) h = (h ^ (unsigned char)*c) * 16777619u;
+        }
+        session.char_id = h ? h : 1;
+    }
     session.mounted  = lm.context[84] != 0;      // mountIndex: uint8 after processId
     return true;
 }
