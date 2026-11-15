@@ -18,8 +18,8 @@
 // The spike build is a wholly separate addon: its own file name, arcdps sig and
 // ini, so it can sit in the addons folder beside an installed release build
 // without arcdps rejecting it as a duplicate or the two sharing settings.
-#ifdef PLAYER_OUTLINE_SPIKE
 #include "replay_tint.hpp"
+#ifdef PLAYER_OUTLINE_SPIKE
 #define PO_MOD_NAME "player_outline_dev"
 #define PO_INI_NAME "arcdps_player_outline_dev.ini"
 #define PO_SIG      0x504F4C45
@@ -79,14 +79,9 @@ static bool build_ground_ring(const core::AvatarState& avatar, const core::Camer
 // called each frame by arcdps; not_charsel_or_loading==1 when safe to draw,
 // hide==1 when arcdps has hidden its UI (its own hide key).
 static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
-#ifdef PLAYER_OUTLINE_SPIKE
-    // The scanner must still run with the marker switched off, so the "enabled"
-    // gate moves below the spike block in this build.
-    constexpr bool kGateOnEnabled = false;
-#else
-    constexpr bool kGateOnEnabled = true;
-#endif
-    if (!not_charsel_or_loading || hide || (kGateOnEnabled && !g_cfg.enabled)) {
+    // The character outline runs with the marker switched off too, so the
+    // marker's "enabled" gate comes after the outline block below.
+    if (!not_charsel_or_loading || hide) {
         reset_smoothing();
         return 0;
     }
@@ -95,13 +90,23 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
     if (!g_reader.sample(avatar, cam, session)) { reset_smoothing(); return 0; }
     g_race = session.race;   // cache for the options panel to highlight
 
-#ifdef PLAYER_OUTLINE_SPIKE
-    // Runs on the render thread, same as the draw hooks, so plain assignments
-    // are enough to hand the probe this frame's camera and avatar.
+    // Character outline. Runs on the render thread, same as the draw hooks, so
+    // plain assignments are enough to hand it this frame's camera and avatar.
     {
         ImVec2 ssz = ImGui::GetIO().DisplaySize;
+#ifndef PLAYER_OUTLINE_SPIKE
+        // Settings come from the options panel. Like the marker, off in PvP.
+        const bool pvp = session.mode != core::GameMode::WvW && session.mode != core::GameMode::PvE;
+        *spike::outline_flag() = g_cfg.body_outline && !pvp;
+        *spike::thickness() = g_cfg.body_thickness;
+        *spike::fill() = g_cfg.body_fill;
+        for (int i = 0; i < 3; ++i) spike::outline_rgb()[i] = g_cfg.body_color[i];
+#endif
         spike::set_mounted(session.mounted);
         spike::set_frame(avatar.position, cam, ssz.x, ssz.y);
+    }
+#ifdef PLAYER_OUTLINE_SPIKE
+    {
         // Mouse-driven controls: the probe does no keyboard polling at all.
         ImGui::SetNextWindowPos(ImVec2(12.0f, 36.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("player outline probe 3r", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing)) {
@@ -138,8 +143,8 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
         }
         ImGui::End();
     }
-    if (!g_cfg.enabled) { reset_smoothing(); return 0; }
 #endif
+    if (!g_cfg.enabled) { reset_smoothing(); return 0; }
 
     // Hide over the full-screen map / when alt-tabbed, per the user's toggles.
     if ((g_cfg.hide_when_map_open && session.map_open) ||
@@ -259,12 +264,26 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
     return 0;
 }
 
-static uintptr_t options_cb() { plugin::draw_options(g_cfg, g_race); return 0; }
+static uintptr_t options_cb() {
+    plugin::draw_options(g_cfg, g_race);
+    ImGui::Separator();
+    ImGui::Checkbox("Character outline (experimental)", &g_cfg.body_outline);
+    if (g_cfg.body_outline) {
+        ImGui::ColorEdit3("Character outline color", g_cfg.body_color);
+        ImGui::SliderFloat("Character outline thickness", &g_cfg.body_thickness, 1.0f, 8.0f, "%.0f px");
+        ImGui::SliderFloat("Character fill", &g_cfg.body_fill, 0.0f, 0.6f, "%.2f");
+        if (ImGui::Button("Re-learn my gear")) spike::forget_gear();
+        ImGui::TextDisabled("Learns your gear while no other player is within a few metres.");
+    }
+    return 0;
+}
 
 static arcdps_exports* mod_init() {
     resolve_ini_path();
     if (g_ini[0]) plugin::load_config(g_cfg, g_ini);
-#ifdef PLAYER_OUTLINE_SPIKE
+#ifndef PLAYER_OUTLINE_SPIKE
+    spike::install(g_swapchain, nullptr);   // no log file in release builds
+#else
     {
         char log[MAX_PATH];
         std::snprintf(log, MAX_PATH, "%s", g_ini);
@@ -283,9 +302,7 @@ static arcdps_exports* mod_init() {
     return &g_arc;
 }
 static uintptr_t mod_release() {
-#ifdef PLAYER_OUTLINE_SPIKE
     spike::shutdown();
-#endif
     if (g_ini[0]) plugin::save_config(g_cfg, g_ini);
     return 0;
 }

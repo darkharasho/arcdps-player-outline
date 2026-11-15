@@ -21,7 +21,7 @@ if(GIT_FOUND)
 endif()
 message(STATUS "player_outline version: ${PLUGIN_VERSION}")
 
-# Throwaway spike build: adds the DrawIndexed constant-buffer scanner and
+# Dev build: adds the outline probe window and scan log, and
 # renames the whole addon (file, arcdps sig, ini) so it can be installed next to
 # a release build without colliding with it.
 option(PLAYER_OUTLINE_SPIKE "Build the dev draw-call scanner DLL" OFF)
@@ -36,9 +36,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         src/plugin/config_io.cpp
         src/core/mumble_data.cpp
         src/core/camera.cpp
+        src/spike/replay_tint.cpp
         ${IMGUI_SRC})
     if(PLAYER_OUTLINE_SPIKE)
-        target_sources(arcdps_player_outline PRIVATE src/spike/replay_tint.cpp)
         set(PLUGIN_OUTPUT_NAME "arcdps_player_outline_dev")
     else()
         set(PLUGIN_OUTPUT_NAME "arcdps_player_outline")
@@ -49,9 +49,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         third_party/imgui third_party/arcdps src/core src/spike)
     target_compile_definitions(arcdps_player_outline PRIVATE
         PLUGIN_VERSION="${PLUGIN_VERSION}")
+    target_link_libraries(arcdps_player_outline PRIVATE d3d11 dxgi)
     if(PLAYER_OUTLINE_SPIKE)
         target_compile_definitions(arcdps_player_outline PRIVATE PLAYER_OUTLINE_SPIKE)
-        target_link_libraries(arcdps_player_outline PRIVATE d3d11 dxgi)
     endif()
     target_link_options(arcdps_player_outline PRIVATE
         -static -static-libgcc -static-libstdc++)

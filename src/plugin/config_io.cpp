@@ -18,6 +18,9 @@ void save_config(const Config& c, const char* path) {
     std::fprintf(f, "outline=%d\noc_r=%.4f\noc_g=%.4f\noc_b=%.4f\noutline_width=%.4f\n",
                  c.outline ? 1 : 0, c.outline_color[0], c.outline_color[1],
                  c.outline_color[2], c.outline_width);
+    std::fprintf(f, "body_outline=%d\nbc_r=%.4f\nbc_g=%.4f\nbc_b=%.4f\nbody_thickness=%.4f\nbody_fill=%.4f\n",
+                 c.body_outline ? 1 : 0, c.body_color[0], c.body_color[1], c.body_color[2],
+                 c.body_thickness, c.body_fill);
     std::fprintf(f, "ring_radius=%.4f\n", c.ring_radius);
     std::fprintf(f, "glow_width=%.4f\nglow_amount=%.4f\nchar_height=%.4f\n",
                  c.glow_width, c.glow_amount, c.char_height);
@@ -51,6 +54,9 @@ static void sanitize(Config& c) {
     for (int i = 0; i < 3; ++i) c.outline_color[i] = clampf(c.outline_color[i], 0.0f, 1.0f);
     c.opacity       = clampf(c.opacity, 0.05f, 1.0f);
     c.outline_width = clampf(c.outline_width, 0.5f, 8.0f);
+    for (int i = 0; i < 3; ++i) c.body_color[i] = clampf(c.body_color[i], 0.0f, 1.0f);
+    c.body_thickness = clampf(c.body_thickness, 1.0f, 8.0f);
+    c.body_fill      = clampf(c.body_fill, 0.0f, 0.6f);
     // ring_radius changed units (px -> meters); a wildly out-of-range value is a
     // stale pixel radius, so reset to default rather than clamp to the max.
     if (c.ring_radius < 0.2f || c.ring_radius > 2.5f) c.ring_radius = 0.6f;
@@ -97,6 +103,12 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "oc_g"))         c.outline_color[1] = v;
         else if (!std::strcmp(key, "oc_b"))         c.outline_color[2] = v;
         else if (!std::strcmp(key, "outline_width")) c.outline_width = v;
+        else if (!std::strcmp(key, "body_outline"))   c.body_outline = (v != 0);
+        else if (!std::strcmp(key, "bc_r"))           c.body_color[0] = v;
+        else if (!std::strcmp(key, "bc_g"))           c.body_color[1] = v;
+        else if (!std::strcmp(key, "bc_b"))           c.body_color[2] = v;
+        else if (!std::strcmp(key, "body_thickness")) c.body_thickness = v;
+        else if (!std::strcmp(key, "body_fill"))      c.body_fill = v;
         else if (!std::strcmp(key, "ring_radius"))  c.ring_radius = v;
         else if (!std::strcmp(key, "glow_width"))   c.glow_width = v;
         else if (!std::strcmp(key, "glow_amount"))  c.glow_amount = v;
