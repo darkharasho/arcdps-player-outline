@@ -408,7 +408,7 @@ struct LockedMesh {
     bool notf;            // learned from the cylinder: carries no readable transform
     uint64_t k1;          // full key (with shaders) of this frame's first sighting = pass 1
     bool had2, had2_prev; // seen again with other shaders (pass 2) this / last frame
-    int n1, best_i, n2; int prev_n1, prev_best;   // copies seen in pass 1, which of them was nearest, copies seen in pass 2
+    int n1, best_i, n2; int prev_n1, prev_best; int far_frames;   // copies seen in pass 1, which of them was nearest, copies seen in pass 2
 };
 int g_foreign_near = 0, g_quiet = 0, g_p2_rej = 0, g_demoted = 0;
 bool g_mounted = false;
@@ -647,6 +647,7 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
         bool accept = !body_only && is_mine(key);
         bool want_sample = !body_only;
         bool tight = false;   // piece with no transform: clip its mask close to the avatar
+        bool roomy = false;   // piece with no transform, only copy on screen: wide clip
         bool sure = false;    // identified by its own position or as the only copy: no mask clip
         if (g_use_tf) {
             bool skinned = false;
@@ -661,7 +662,9 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                         // Probe 3l: nearest instance wins. The scene is drawn
                         // in two passes, all of pass 1 first. Pass 1 only
                         // measures; pass 2 masks the instance that was nearest.
-                        sure = true;
+                        // Skinned pieces only: a rigid prop's buffer can hold
+                        // a position near us that is not the prop's own.
+                        sure = skinned;
                         if (!lm->k1) lm->k1 = key;
                         if (key == lm->k1) {
                             const int i1 = lm->n1;
@@ -670,9 +673,14 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                             // A mesh with a single copy last frame is masked here
                             // too: its second-pass draw is not there every frame
                             // (capes while running), and waiting for it flickers.
+                            // Several copies (someone else wears the same piece):
+                            // take the one about as near as ours was last frame.
+                            // Distances in this pass are steady frame to frame,
+                            // unlike the draw order between the two passes, which
+                            // made a shared cape vanish in groups.
+                            (void)i1;
                             accept = d <= g_lock_radius &&
-                                     (!g_nearest || lm->prev_n1 <= 1 ||
-                                      (!lm->had2_prev && i1 == lm->prev_best));
+                                     (!g_nearest || lm->prev_n1 <= 1 || d <= lm->prev + 0.3f);
                             if (d > g_lock_radius) {
                                 ++g_rej_range;
                                 if (g_diag_lines < 300) { ++g_diag_lines;
@@ -686,8 +694,9 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                             // compared across passes. One copy: take it. Several:
                             // take the one in the same position in the draw order.
                             const int i2 = lm->n2++;
-                            accept = d <= g_lock_radius &&
-                                     (!g_nearest || lm->n1 <= 1 || i2 == lm->best_i);
+                            // With several copies the first pass has already
+                            // picked ours; nothing is added here.
+                            accept = d <= g_lock_radius && (!g_nearest || lm->n1 <= 1);
                             if (!accept) {
                                 ++g_p2_rej;
                                 if (d > g_lock_radius) ++g_rej_range; else ++g_rej_order;
@@ -728,7 +737,10 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                     if (key == lm->k1) ++lm->n1;
                 }
                 tight = lm && lm->notf && (lm->prev_n1 > 1 || lm->n1 > 1);
-                sure = lm && lm->notf && !tight;
+                // The only copy on screen is not proof it is ours: a banner or
+                // prop learned by mistake has single copies far away too. Give
+                // it room for a streaming cape, but keep it near the avatar.
+                roomy = lm && lm->notf && !tight;
                 want_sample = !lm;
                 // A known mesh whose transform could not be read this time is
                 // still drawn; the mask cylinder keeps distant copies out.
@@ -799,9 +811,10 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 // Probe 3e result: clipping the mask to the learning cylinder
                 // cut the outline through capes and weapons. The mask uses a
                 // roomier cylinder so a whole piece survives.
-                // A piece already picked out as ours is drawn whole: clipping it
-                // cut long capes in half when they streamed out behind.
-                upload_params(ctx, vp, white, tight ? 0.2f : sure ? 1000.0f : g_margin);
+                // A piece already picked out as ours gets a wide clip (the normal
+                // one cut long capes in half), but never none at all: with no
+                // clip, wrongly learned props lit up across the whole map.
+                upload_params(ctx, vp, white, tight ? 0.2f : (sure || roomy) ? 4.0f : g_margin);
                 ctx->OMSetRenderTargets(1, &g_mask_rtv, nullptr);
                 ctx->OMSetBlendState(nullptr, factor, 0xffffffff);
                 ctx->PSSetShader(g_ps, nullptr, 0);
@@ -1168,14 +1181,24 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     // skinned has been close for kLearnFrames frames in a row.
     // Probe 3o: our own meshes never leave us. A known mesh whose nearest copy
     // this frame was out of range was learned by mistake: drop it for good.
-    for (int i = 0; i < g_n_lock;) {
-        // While mounted the rider's bones wander, so only a mesh that is clearly
-        // somewhere else is dropped.
-        if (!g_lock[i].notf && g_lock[i].n1 > 0 && g_lock[i].cur > (g_mounted ? 8.0f : g_lock_radius)) {
-            g_foreign.add(g_lock[i].mk); ++g_demoted;
-            log_line("# 3p dropped mesh %016llx: nearest copy %.2f m", (unsigned long long)g_lock[i].mk, g_lock[i].cur);
+    // A mesh is only dropped after being far for a while, and never when most
+    // of the gear is far at once: that is our own position jumping (waypoint,
+    // portal, teleport skill), and dropping then lost the whole body for good.
+    {
+        const float lim = g_mounted ? 8.0f : g_lock_radius;
+        int seen = 0, n_away = 0;
+        for (int i = 0; i < g_n_lock; ++i)
+            if (!g_lock[i].notf && g_lock[i].n1 > 0) { ++seen; if (g_lock[i].cur > lim) ++n_away; }
+        const bool jump = n_away * 2 > seen;
+        for (int i = 0; i < g_n_lock;) {
+            LockedMesh& l = g_lock[i];
+            const bool is_far = !l.notf && l.n1 > 0 && l.cur > lim;
+            if (!is_far || jump) { if (!is_far) l.far_frames = 0; ++i; continue; }
+            if (++l.far_frames < 45) { ++i; continue; }
+            g_foreign.add(l.mk); ++g_demoted;
+            log_line("# dropped mesh %016llx: nearest copy %.2f m", (unsigned long long)l.mk, l.cur);
             g_lock[i] = g_lock[--g_n_lock];
-        } else ++i;
+        }
     }
     for (int i = 0; i < g_n_lock; ++i) {
         LockedMesh& l = g_lock[i];
@@ -1194,7 +1217,9 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     // Probe 3q: a mount is too big to judge by distance and would be learned in
     // bits; while mounted the gear set is frozen and only the rider is outlined.
     if (g_mounted) { g_ring = 1; g_n_far = 0; }
-    g_quiet = (g_ring == 0 && !crowded) ? g_quiet + 1 : 0;
+    // Pieces without a position are judged by the cylinder alone, so they are
+    // never learned while anyone else's gear is close, known gear or not.
+    g_quiet = (g_ring == 0 && g_foreign_near == 0) ? g_quiet + 1 : 0;
     // Cylinder samples taken while someone else was close may be their pieces
     // (a head on the same spot). Throw them away; samples are read back a few
     // frames late, so keep discarding for the first frames of a quiet spell.
