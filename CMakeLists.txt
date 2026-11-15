@@ -64,6 +64,7 @@ else()
         tests/core/test_camera.cpp
         tests/core/test_one_euro.cpp
         tests/core/test_config.cpp
+        tests/core/test_version.cpp
         tests/core/test_cb_scan.cpp
         tests/core/test_fingerprint.cpp
         src/plugin/config_io.cpp
