@@ -28,6 +28,14 @@ option(PLAYER_OUTLINE_SPIKE "Build the dev draw-call scanner DLL" OFF)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     file(GLOB IMGUI_SRC third_party/imgui/*.cpp)
+    # MinHook (BSD 2-clause): inline hooks for native Windows D3D11, whose
+    # context vtable is rewritten by the runtime.
+    enable_language(C)
+    set(MINHOOK_SRC
+        third_party/minhook/src/buffer.c
+        third_party/minhook/src/hook.c
+        third_party/minhook/src/trampoline.c
+        third_party/minhook/src/hde/hde64.c)
     add_library(arcdps_player_outline SHARED
         src/plugin/dllmain.cpp
         src/plugin/mumble_link.cpp
@@ -38,7 +46,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         src/core/camera.cpp
         src/spike/replay_tint.cpp
         src/plugin/update_check.cpp
-        ${IMGUI_SRC})
+        ${IMGUI_SRC} ${MINHOOK_SRC})
     if(PLAYER_OUTLINE_SPIKE)
         set(PLUGIN_OUTPUT_NAME "arcdps_player_outline_dev")
     else()
@@ -47,7 +55,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set_target_properties(arcdps_player_outline PROPERTIES
         PREFIX "" OUTPUT_NAME "${PLUGIN_OUTPUT_NAME}")
     target_include_directories(arcdps_player_outline PRIVATE
-        third_party/imgui third_party/arcdps src/core src/spike)
+        third_party/imgui third_party/arcdps third_party/minhook/include src/core src/spike)
     target_compile_definitions(arcdps_player_outline PRIVATE
         PLUGIN_VERSION="${PLUGIN_VERSION}")
     target_link_libraries(arcdps_player_outline PRIVATE d3d11 dxgi winhttp)

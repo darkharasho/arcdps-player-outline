@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include "replay_tint.hpp"
+#include "MinHook.h"
 
 namespace spike {
 namespace {
@@ -403,6 +404,15 @@ struct VtHook {
 constexpr int kMaxVt = 8;
 VtHook g_vts[kMaxVt] = {};
 int g_n_vt = 0, g_rehooked = 0, g_vt_logs = 0;
+// Inline mode. Native Windows D3D11 keeps the immediate context's vtable on
+// the heap and writes its own functions back into the draw and update slots,
+// so a vtable hook there is gone within the frame. For those three calls the
+// function itself is hooked instead (MinHook), and the vtable is left alone.
+// g_inl_target[k] is the hooked function, g_inl_tramp[k] calls its original.
+bool  g_inline = false, g_inline_failed = false;
+int   g_lost_frames = 0;
+void* g_inl_target[3] = {};   // DrawIndexed, DrawIndexedInstanced, UpdateSubresource
+void* g_inl_tramp[3]  = {};
 inline const VtHook& vt_of(ID3D11DeviceContext* ctx) {
     void** v = *reinterpret_cast<void***>(ctx);
     for (int i = 0; i < g_n_vt; ++i) if (g_vts[i].vt == v) return g_vts[i];
@@ -1128,12 +1138,27 @@ int hook_vtable(void** vt) {
         {kUnmapSlot,                (void*)&hk_Unmap,                (void**)&h->unmap},
         {kUpdateSubresourceSlot,    (void*)&hk_UpdateSubresource,    (void**)&h->upd},
     };
+    // A slot holding a function that is hooked inline is not hooked a second
+    // time here (our hook would call the function, which jumps back into our
+    // hook): its original is the inline trampoline.
+    auto inline_tramp = [&](void* cur) -> void* {
+        if (!g_inline) return nullptr;
+        for (int k = 0; k < 3; ++k) if (cur == g_inl_target[k]) return g_inl_tramp[k];
+        return nullptr;
+    };
     // Originals first, so a hook reached mid-way always has one to call.
-    for (auto& sl : slots) if (vt[sl.slot] != sl.fn) *sl.saved = vt[sl.slot];
+    for (auto& sl : slots) {
+        if (vt[sl.slot] == sl.fn) continue;
+        void* t = inline_tramp(vt[sl.slot]);
+        *sl.saved = t ? t : vt[sl.slot];
+    }
     if (h == &g_vts[g_n_vt]) ++g_n_vt;
     int n = 0;
-    for (auto& sl : slots)
-        if (vt[sl.slot] != sl.fn) { if (!write_slot(vt, sl.slot, sl.fn)) return -1; ++n; }
+    for (auto& sl : slots) {
+        if (vt[sl.slot] == sl.fn || inline_tramp(vt[sl.slot])) continue;
+        if (!write_slot(vt, sl.slot, sl.fn)) return -1;
+        ++n;
+    }
     return n;
 }
 
@@ -1147,8 +1172,58 @@ const char* module_of(void* addr) {
     return b ? b + 1 : path;
 }
 
+// Switches DrawIndexed, DrawIndexedInstanced and UpdateSubresource from vtable
+// hooks to inline hooks on the functions the first vtable originally held.
+bool go_inline(const char* why) {
+    if (g_inline || g_inline_failed || g_n_vt == 0) return g_inline;
+    static const int kSl[3] = {kDrawIndexedSlot, kDrawIndexedInstancedSlot, kUpdateSubresourceSlot};
+    void* const hooks[3] = {(void*)&hk_DrawIndexed, (void*)&hk_DrawIndexedInstanced,
+                            (void*)&hk_UpdateSubresource};
+    void* const targets[3] = {(void*)g_vts[0].di, (void*)g_vts[0].dii, (void*)g_vts[0].upd};
+    const MH_STATUS init = MH_Initialize();
+    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
+        g_inline_failed = true;
+        log_line("# inline hooks: MinHook init failed (%s)", MH_StatusToString(init));
+        return false;
+    }
+    void* tramp[3] = {};
+    for (int k = 0; k < 3; ++k) {
+        const MH_STATUS st = MH_CreateHook(targets[k], hooks[k], &tramp[k]);
+        if (st != MH_OK) {
+            g_inline_failed = true;
+            log_line("# inline hooks: could not hook %p in %s (%s)", targets[k], module_of(targets[k]),
+                     MH_StatusToString(st));
+            for (int m = 0; m < k; ++m) MH_RemoveHook(targets[m]);
+            return false;
+        }
+    }
+    // Before the jumps go live: every vtable entry that still holds our hook
+    // gets the function back, and every saved original that is one of the
+    // functions becomes its trampoline. Otherwise hook -> function -> hook.
+    for (int k = 0; k < 3; ++k) { g_inl_target[k] = targets[k]; g_inl_tramp[k] = tramp[k]; }
+    for (int i = 0; i < g_n_vt; ++i) {
+        VtHook& h = g_vts[i];
+        void** saved[3] = {(void**)&h.di, (void**)&h.dii, (void**)&h.upd};
+        for (int k = 0; k < 3; ++k) {
+            if (*saved[k] != targets[k]) continue;
+            if (h.vt[kSl[k]] == hooks[k]) write_slot(h.vt, kSl[k], targets[k]);
+            *saved[k] = tramp[k];
+        }
+    }
+    g_orig = g_vts[0].di; g_orig_dii = g_vts[0].dii; g_orig_update = g_vts[0].upd;
+    g_inline = true;
+    for (int k = 0; k < 3; ++k) {
+        const MH_STATUS st = MH_EnableHook(targets[k]);
+        if (st != MH_OK) log_line("# inline hooks: enabling %p failed (%s)", targets[k], MH_StatusToString(st));
+    }
+    log_line("# inline hooks on (%s): DrawIndexed %p, DrawIndexedInstanced %p, UpdateSubresource %p in %s",
+             why, targets[0], targets[1], targets[2], module_of(targets[0]));
+    return true;
+}
+
 // Once a frame: the context may have moved to another vtable, or something may
-// have written over our slots. A new vtable is hooked; lost slots are logged.
+// have written over our slots. A new vtable is hooked. If the runtime itself
+// put its functions back, switch to inline hooks; anything else is logged.
 void ensure_hooks() {
     if (!g_ctx || g_n_vt == 0) return;
     void** cur = *reinterpret_cast<void***>(g_ctx);
@@ -1167,16 +1242,28 @@ void ensure_hooks() {
     static void* const kFns[] = {(void*)&hk_DrawIndexed, (void*)&hk_DrawIndexedInstanced, (void*)&hk_Map,
                                  (void*)&hk_Unmap, (void*)&hk_UpdateSubresource};
     int lost = 0;
-    for (int i = 0; i < g_n_vt; ++i)
+    bool restored = false;   // the runtime put its own function back in a draw/update slot
+    for (int i = 0; i < g_n_vt; ++i) {
+        const VtHook& h = g_vts[i];
+        void* const orig[5] = {(void*)h.di, (void*)h.dii, (void*)h.map, (void*)h.unmap, (void*)h.upd};
         for (int k = 0; k < 5; ++k) {
-            void* now = g_vts[i].vt[kSlots[k]];
+            void* now = h.vt[kSlots[k]];
             if (now == kFns[k]) continue;
+            if (g_inline && k != 2 && k != 3) {
+                bool ours = false;
+                for (int t = 0; t < 3; ++t) if (now == g_inl_target[t]) ours = true;
+                if (ours) continue;   // reached through the inline hook
+            }
             ++lost;
+            if (!g_inline && k != 2 && k != 3 && now == orig[k]) restored = true;
             if (g_vt_logs < 40) { ++g_vt_logs;
                 log_line("# hook slot %d on vtable %p now holds %p in %s (not ours, left alone)",
-                         kSlots[k], (void*)g_vts[i].vt, now, module_of(now)); }
+                         kSlots[k], (void*)h.vt, now, module_of(now)); }
         }
+    }
     g_rehooked = lost;
+    if (restored) { if (++g_lost_frames >= 3) go_inline("the runtime restored its own functions"); }
+    else g_lost_frames = 0;
 }
 
 // Compiles the pixel shader and creates the buffer and blend state. Any
@@ -1316,6 +1403,16 @@ bool install(void* swapchain, const char* log_path) {
     g_orig_map = g_vts[0].map; g_orig_unmap = g_vts[0].unmap; g_orig_update = g_vts[0].upd;
     log_line("# context vtable %p in %s; DrawIndexed original %p in %s", (void*)g_vtbl, module_of(g_vtbl),
              (void*)g_orig, module_of((void*)g_orig));
+    {   // Test switch: a file "<this dll>.inline" next to the DLL forces inline hooks.
+        char path[MAX_PATH + 16] = {};
+        HMODULE self = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)&module_of, &self) && self &&
+            GetModuleFileNameA(self, path, MAX_PATH)) {
+            std::strcat(path, ".inline");
+            if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) go_inline("forced by file");
+        }
+    }
     {   // Why no draws might reach the hooks: the game recording on deferred contexts.
         D3D11_FEATURE_DATA_THREADING th{};
         const HRESULT hr = g_dev->CheckFeatureSupport(D3D11_FEATURE_THREADING, &th, sizeof(th));
@@ -1330,6 +1427,17 @@ bool install(void* swapchain, const char* log_path) {
 }
 
 void shutdown() {
+    if (g_inline) {
+        MH_DisableHook(MH_ALL_HOOKS);
+        MH_Uninitialize();
+        // The saved originals are trampolines that no longer exist.
+        for (int i = 0; i < g_n_vt; ++i) {
+            VtHook& h = g_vts[i];
+            void** saved[3] = {(void**)&h.di, (void**)&h.dii, (void**)&h.upd};
+            for (int k = 0; k < 3; ++k) if (*saved[k] == g_inl_tramp[k]) *saved[k] = nullptr;
+        }
+        g_inline = false;
+    }
     for (int i = 0; i < g_n_vt; ++i) {
         const VtHook& h = g_vts[i];
         if (h.di)    write_slot(h.vt, kDrawIndexedSlot, (void*)h.di);
@@ -1488,8 +1596,8 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     {   // Probe 3r: say why nothing is being learned, every ~5 s.
         static int tick = 0;
         if (++tick >= 300) { tick = 0;
-            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, hook slots lost %d | %s",
-                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_n_vt, g_rehooked, g_summary); g_other_draws = 0; }
+            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, hook slots lost %d, inline %d | %s",
+                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_n_vt, g_rehooked, (int)g_inline, g_summary); g_other_draws = 0; }
     }
     g_p2_rej = 0; g_rej_range = 0; g_rej_order = 0; g_lost_tf = 0;
     g_last_ring = g_ring; g_n_pend = 0; g_ring = 0; g_foreign_near = 0;
