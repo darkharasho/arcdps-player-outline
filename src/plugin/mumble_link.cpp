@@ -88,6 +88,7 @@ bool MumbleReader::sample(core::AvatarState& avatar, core::CameraState& cam,
     uint32_t ui = core::read_ui_state(lm);
     session.map_open = core::ui_map_open(ui);
     session.focused  = core::ui_game_focused(ui);
+    std::memcpy(&session.map_id, &lm.context[28], sizeof(session.map_id));   // after serverAddress[28]
     session.mounted  = lm.context[84] != 0;      // mountIndex: uint8 after processId
     return true;
 }

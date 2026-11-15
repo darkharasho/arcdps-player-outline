@@ -194,8 +194,11 @@ bool g_in_hook = false;
 // Per-frame counters, published to the summary line at the next set_frame.
 int g_draws = 0, g_replayed = 0;
 
+int g_log_limit = 0, g_log_lines = 0;   // 0 = no limit (dev build)
+
 void log_line(const char* fmt, ...) {
     if (!g_log_path[0]) return;
+    if (g_log_limit > 0 && ++g_log_lines > g_log_limit) return;
     FILE* f = std::fopen(g_log_path, "a");
     if (!f) return;
     va_list ap;
@@ -408,10 +411,16 @@ struct LockedMesh {
     bool notf;            // learned from the cylinder: carries no readable transform
     uint64_t k1;          // full key (with shaders) of this frame's first sighting = pass 1
     bool had2, had2_prev; // seen again with other shaders (pass 2) this / last frame
-    int n1, best_i, n2; int prev_n1, prev_best; int far_frames;   // copies seen in pass 1, which of them was nearest, copies seen in pass 2
+    int n1, best_i, n2; int prev_n1, prev_best; int far_frames;
+    bool s_seen, s_in; int out_n;   // cylinder samples of a piece without a transform   // copies seen in pass 1, which of them was nearest, copies seen in pass 2
 };
 int g_foreign_near = 0, g_quiet = 0, g_p2_rej = 0, g_demoted = 0;
 bool g_mounted = false;
+// Frames left in which nothing is learned, marked or dropped: after our
+// position jumps or frames stop coming (waypoint, portal, loading screen) the
+// drawn character and the reported position disagree for a while.
+int g_settle = 0;
+unsigned long long g_last_tick = 0;
 int g_rej_range = 0, g_rej_order = 0, g_lost_tf = 0, g_diag_lines = 0;   // probe 3r diagnostics
 constexpr float kForeignDist = 1.5f;           // an unknown mesh with no copy this close is someone else's
 bool g_nearest = true;                         // of several copies of a mesh, outline the nearest only
@@ -454,10 +463,38 @@ template <int N> struct KeySet {           // N a power of two; 0 is "empty"
 };
 KeySet<8192> g_foreign;
 KeySet<2048> g_close;
+// How many frames in a row an unknown mesh was seen only away from us. One such
+// frame is not proof it is someone else's: around map loads and mounting our
+// own gear is briefly drawn away from the reported position.
+struct FarStreak {
+    enum { N = 4096 };
+    uint64_t k[N] = {}; unsigned short c[N] = {}; unsigned f[N] = {}; int n = 0;
+    int slot(uint64_t v, bool make) {
+        for (size_t i = (size_t)(v * 0x9E3779B97F4A7C15ULL >> 40) & (N - 1), p = 0; p < 64;
+             ++p, i = (i + 1) & (N - 1)) {
+            if (k[i] == v) return (int)i;
+            if (!k[i]) { if (!make) return -1; k[i] = v; c[i] = 0; f[i] = 0; ++n; return (int)i; }
+        }
+        return -1;
+    }
+    void clear() { if (n) { std::memset(k, 0, sizeof(k)); n = 0; } }
+    // Counts one far-only frame for v; returns the streak so far.
+    int bump(uint64_t v, unsigned frame) {
+        if (n >= N / 2) clear();
+        const int i = slot(v, true);
+        if (i < 0) return 0;
+        if (f[i] != frame) { f[i] = frame; if (c[i] < 60000) ++c[i]; }
+        return c[i];
+    }
+    void reset(uint64_t v) { const int i = slot(v, false); if (i >= 0) c[i] = 0; }
+};
+FarStreak g_far_streak;
+unsigned g_far_frame = 0;
+constexpr int kForeignFrames = 45;
 constexpr int kMaxFar = 1024;
 uint64_t g_far[kMaxFar];
 int  g_n_far = 0;
-bool g_rigid = true;                           // rigid pieces with a transform take part too
+bool  g_rigid = false;   // rigid pieces (weapons, props) report unreliable positions: left out
 constexpr UINT kSkinnedBytes = 4096;           // bone-palette buffers are ~16 KB, rigid ones < 500 B
 int   g_cap_map = 0, g_cap_upd = 0, g_tf_found = 0, g_tf_near = 0;
 
@@ -707,7 +744,7 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                         }
                     } else if (!lm) {
                         if (d > kForeignDist) { if (g_n_far < kMaxFar) g_far[g_n_far++] = mk; }
-                        else g_close.add(mk);
+                        else { g_close.add(mk); g_far_streak.reset(mk); }
                         const bool foreign = g_foreign.has(mk);
                         if (foreign) {
                             accept = false;
@@ -741,7 +778,9 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 // prop learned by mistake has single copies far away too. Give
                 // it room for a streaming cape, but keep it near the avatar.
                 roomy = lm && lm->notf && !tight;
-                want_sample = !lm;
+                // Known pieces of this kind keep being sampled: one that is on
+                // screen but nowhere inside our cylinder belongs to someone else.
+                want_sample = !lm || lm->notf;
                 // A known mesh whose transform could not be read this time is
                 // still drawn; the mask cylinder keeps distant copies out.
                 if (lm && !lm->notf) ++g_lost_tf;
@@ -936,11 +975,17 @@ void composite() {
 void read_samples() {
     for (int i = 0; i < g_n_mine; ++i) --g_mine[i].ttl;
     int qualified = 0;
+    for (int i = 0; i < g_n_lock; ++i) { g_lock[i].s_seen = false; g_lock[i].s_in = false; }
     for (int i = 0; i < g_n_samp; ++i) {
         Sample& sm = g_samp[i];
         UINT64 in = 0, all = 0;
         if (g_ctx->GetData(sm.q_in, &in, sizeof(in), 0) != S_OK) continue;
         if (g_ctx->GetData(sm.q_all, &all, sizeof(all), 0) != S_OK) continue;
+        if (LockedMesh* lm = find_lock(sm.mk)) {
+            // Any copy with a real share of its pixels inside counts as ours.
+            if (lm->notf && all >= 8) { lm->s_seen = true; if (in >= 8 && in * 50 >= all) lm->s_in = true; }
+            continue;
+        }
         if (all < 8 || (double)in < 0.01 * g_learn_pct * (double)all) continue;
         ++qualified;
         int j = 0;
@@ -954,6 +999,19 @@ void read_samples() {
     for (int i = 0; i < g_n_mine;) {
         if (g_mine[i].ttl <= 0) g_mine[i] = g_mine[--g_n_mine];
         else ++i;
+    }
+    // A learned piece without a transform that was drawn three samples running
+    // (about a second) with nothing inside our cylinder was never ours: it
+    // belonged to someone who stood on our spot and has walked off. Drop it and
+    // remember it as theirs. Not while mounted: the rider sits off the spot.
+    for (int i = 0; i < g_n_lock;) {
+        LockedMesh& l = g_lock[i];
+        if (!l.notf || !l.s_seen || g_mounted || g_settle > 0) { l.out_n = 0; ++i; continue; }
+        if (l.s_in) { l.out_n = 0; ++i; continue; }
+        if (++l.out_n < 3) { ++i; continue; }
+        g_foreign.add(l.mk); ++g_demoted;
+        log_line("# dropped piece %016llx: outside the cylinder", (unsigned long long)l.mk);
+        g_lock[i] = g_lock[--g_n_lock];
     }
     g_last_sampled = g_n_samp; g_last_qualified = qualified;
     g_n_samp = 0;
@@ -1185,6 +1243,17 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     // of the gear is far at once: that is our own position jumping (waypoint,
     // portal, teleport skill), and dropping then lost the whole body for good.
     {
+        const unsigned long long now = GetTickCount64();
+        const core::Vec3 dv = avatar - g_avatar;
+        const bool moved = dv.x * dv.x + dv.y * dv.y + dv.z * dv.z > 5.0f * 5.0f;
+        const bool gap = g_last_tick != 0 && now - g_last_tick > 500;
+        if (moved || gap) {
+            if (g_settle == 0) log_line("# settle: %s", moved ? "position jumped" : "frames resumed");
+            g_settle = 120;
+        } else if (g_settle > 0) --g_settle;
+        g_last_tick = now;
+    }
+    if (g_settle == 0) {
         const float lim = g_mounted ? 8.0f : g_lock_radius;
         int seen = 0, n_away = 0;
         for (int i = 0; i < g_n_lock; ++i)
@@ -1216,7 +1285,7 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     // nobody else has been close for a while.
     // Probe 3q: a mount is too big to judge by distance and would be learned in
     // bits; while mounted the gear set is frozen and only the rider is outlined.
-    if (g_mounted) { g_ring = 1; g_n_far = 0; }
+    if (g_mounted || g_settle > 0) { g_ring = 1; g_n_far = 0; }
     // Pieces without a position are judged by the cylinder alone, so they are
     // never learned while anyone else's gear is close, known gear or not.
     g_quiet = (g_ring == 0 && g_foreign_near == 0) ? g_quiet + 1 : 0;
@@ -1227,14 +1296,16 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     if (g_use_tf && g_body_only && g_lock_on && g_quiet >= kLearnFrames) {
         int added = 0;
         for (int i = 0; i < g_n_mine && g_n_lock < kMaxLock; ++i)
-            if (g_mine[i].mk && !find_lock(g_mine[i].mk)) {
+            if (g_mine[i].mk && !find_lock(g_mine[i].mk) && !g_foreign.has(g_mine[i].mk)) {
                 LockedMesh l{}; l.mk = g_mine[i].mk; l.prev = l.cur = 1e9f; l.notf = true;
                 g_lock[g_n_lock++] = l; ++added;
             }
         if (added) log_line("# gear lock: learned %d pieces without a transform, %d known", added, g_n_lock);
     }
+    ++g_far_frame;
     for (int i = 0; i < g_n_far; ++i)
-        if (!g_close.has(g_far[i])) g_foreign.add(g_far[i]);
+        if (!g_close.has(g_far[i]) && g_far_streak.bump(g_far[i], g_far_frame) >= kForeignFrames)
+            g_foreign.add(g_far[i]);
     g_n_far = 0; g_close.clear();
     if (g_ring == 0 && !crowded && g_n_pend > 0) {
         if (++g_alone_streak >= kLearnFrames) {
@@ -1298,7 +1369,17 @@ bool*  gear_lock() { return &g_lock_on; }
 float* gear_radius() { return &g_lock_radius; }
 float* learn_range() { return &g_ring_radius; }
 void set_mounted(bool m) { g_mounted = m; }
-void forget_gear() { g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); }
+void set_log_limit(int lines) { g_log_limit = lines; }
+void forget_gear() {
+    g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear();
+}
+// A new map reloads every model, so every mesh id we hold is stale.
+void set_map(unsigned id) {
+    static unsigned last = 0;
+    if (id == last) return;
+    if (last != 0 && id != 0) { forget_gear(); g_settle = 120; log_line("# map %u -> %u: gear forgotten", last, id); }
+    if (id != 0) last = id;
+}
 bool*  rigid_pieces() { return &g_rigid; }
 bool*  nearest_only() { return &g_nearest; }
 float* transform_radius() { return &g_tf_radius; }

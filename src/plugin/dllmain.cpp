@@ -104,6 +104,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
         for (int i = 0; i < 3; ++i) spike::outline_rgb()[i] = g_cfg.body_color[i];
 #endif
         spike::set_mounted(session.mounted);
+        spike::set_map(session.map_id);
         spike::set_frame(avatar.position, cam, ssz.x, ssz.y);
     }
 #ifdef PLAYER_OUTLINE_SPIKE
@@ -298,7 +299,21 @@ static arcdps_exports* mod_init() {
     if (g_ini[0]) plugin::load_config(g_cfg, g_ini);
     if (g_cfg.check_updates) plugin::start_update_check(kBuild);
 #ifndef PLAYER_OUTLINE_SPIKE
-    spike::install(g_swapchain, nullptr);   // no log file in release builds
+    {
+        // A short log of learn/drop events, started fresh each launch and
+        // capped, so a problem report can come with evidence.
+        char log[MAX_PATH];
+        std::snprintf(log, MAX_PATH, "%s", g_ini);
+        char* dot = std::strrchr(log, '.');
+        if (dot && g_ini[0]) {
+            std::strncpy(dot, ".log", (size_t)(log + MAX_PATH - dot - 1));
+            if (FILE* f = std::fopen(log, "w")) std::fclose(f);
+            spike::set_log_limit(3000);
+            spike::install(g_swapchain, log);
+        } else {
+            spike::install(g_swapchain, nullptr);
+        }
+    }
 #else
     {
         char log[MAX_PATH];
