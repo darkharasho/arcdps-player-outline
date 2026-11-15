@@ -105,9 +105,12 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
     {
         ImVec2 ssz = ImGui::GetIO().DisplaySize;
 #ifndef PLAYER_OUTLINE_SPIKE
-        // Settings come from the options panel. Like the marker, off in PvP.
-        const bool pvp = session.mode != core::GameMode::WvW && session.mode != core::GameMode::PvE;
-        *spike::outline_flag() = g_cfg.body_outline && !pvp;
+        // Settings come from the options panel. Like the marker: off in PvP,
+        // and PvE/WvW follow their toggles.
+        const bool outline_mode_on = (session.mode == core::GameMode::WvW) ? g_cfg.show_in_wvw
+                                   : (session.mode == core::GameMode::PvE) ? g_cfg.show_in_pve
+                                   : false;
+        *spike::outline_flag() = g_cfg.body_outline && outline_mode_on;
         *spike::thickness() = g_cfg.body_thickness;
         *spike::fill() = g_cfg.body_fill;
         for (int i = 0; i < 3; ++i) spike::outline_rgb()[i] = g_cfg.body_color[i];
