@@ -413,10 +413,12 @@ bool  g_inline = false, g_inline_failed = false;
 int   g_lost_frames = 0;
 void* g_inl_target[3] = {};   // DrawIndexed, DrawIndexedInstanced, UpdateSubresource
 void* g_inl_tramp[3]  = {};
-// Inline mode starts in steps, each announced in the log, so that a crash can
-// be pinned on one of them: nothing hooked for kInlineWait frames, then hooks
-// that only pass the call on, then reading constant buffers, then the outline.
-constexpr int kInlineWait = 600, kStageFrames = 300;
+// Inline mode can start in steps, each announced in the log, so that a crash
+// can be pinned on one of them: nothing hooked for kInlineWait frames, then
+// hooks that only pass the call on, then reading constant buffers, then the
+// outline. kStageFrames = 0 turns everything on at once (the steps were used
+// to diagnose a Windows crash and are kept for the next one).
+constexpr int kInlineWait = 3, kStageFrames = 0;
 int g_hook_frames = 0;    // frames since install
 int g_inl_frames = -1;    // frames since inline hooks went live, -1 = not inline
 inline bool stage_ok(int stage) { return !g_inline || g_inl_frames >= (stage - 1) * kStageFrames; }
@@ -1226,7 +1228,7 @@ bool go_inline(const char* why) {
         const MH_STATUS st = MH_EnableHook(targets[k]);
         if (st != MH_OK) log_line("# inline hooks: enabling %p failed (%s)", targets[k], MH_StatusToString(st));
     }
-    log_line("# inline hooks on, step 1 of 3: calls are only passed on");
+    log_line(kStageFrames > 0 ? "# inline hooks on, step 1 of 3: calls are only passed on" : "# inline hooks on");
     return true;
 }
 
@@ -1274,8 +1276,8 @@ void ensure_hooks() {
     ++g_hook_frames;
     if (g_inline) {
         ++g_inl_frames;
-        if (g_inl_frames == kStageFrames) log_line("# inline hooks, step 2 of 3: reading constant buffers (%d draws last frame)", g_draws);
-        if (g_inl_frames == 2 * kStageFrames) log_line("# inline hooks, step 3 of 3: outline on");
+        if (kStageFrames > 0 && g_inl_frames == kStageFrames) log_line("# inline hooks, step 2 of 3: reading constant buffers (%d draws last frame)", g_draws);
+        if (kStageFrames > 0 && g_inl_frames == 2 * kStageFrames) log_line("# inline hooks, step 3 of 3: outline on");
     }
     if (restored) {
         if (g_lost_frames++ == 0)
