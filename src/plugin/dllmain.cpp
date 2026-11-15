@@ -79,7 +79,16 @@ static bool build_ground_ring(const core::AvatarState& avatar, const core::Camer
 
 // called each frame by arcdps; not_charsel_or_loading==1 when safe to draw,
 // hide==1 when arcdps has hidden its UI (its own hide key).
+static char g_outline_log[MAX_PATH] = {};
+static bool g_outline_pending = false;
 static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
+    // The outline's device objects and hooks are set up here, on the render
+    // thread, on the first frame: doing it from arcdps's loading thread used
+    // the graphics device while the game was rendering on another thread.
+    if (g_outline_pending) {
+        g_outline_pending = false;
+        spike::install(g_swapchain, g_outline_log[0] ? g_outline_log : nullptr);
+    }
     // The character outline runs with the marker switched off too, so the
     // marker's "enabled" gate comes after the outline block below.
     if (!not_charsel_or_loading || hide) {
@@ -310,10 +319,9 @@ static arcdps_exports* mod_init() {
             std::strncpy(dot, ".log", (size_t)(log + MAX_PATH - dot - 1));
             if (FILE* f = std::fopen(log, "w")) std::fclose(f);
             spike::set_log_limit(3000);
-            spike::install(g_swapchain, log);
-        } else {
-            spike::install(g_swapchain, nullptr);
+            std::snprintf(g_outline_log, MAX_PATH, "%s", log);
         }
+        g_outline_pending = true;
     }
 #else
     {
@@ -321,7 +329,8 @@ static arcdps_exports* mod_init() {
         std::snprintf(log, MAX_PATH, "%s", g_ini);
         char* dot = std::strrchr(log, '.');
         if (dot) std::strncpy(dot, "_scan.log", (size_t)(log + MAX_PATH - dot - 1));
-        spike::install(g_swapchain, log);
+        std::snprintf(g_outline_log, MAX_PATH, "%s", log);
+        g_outline_pending = true;
     }
 #endif
     g_arc.size = sizeof(arcdps_exports);

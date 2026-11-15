@@ -1391,6 +1391,7 @@ bool create_resources() {
 bool install(void* swapchain, const char* log_path) {
     if (!swapchain || g_orig) return false;
     std::snprintf(g_log_path, sizeof(g_log_path), "%s", log_path ? log_path : "");
+    log_line("# install starting on thread %lu", GetCurrentThreadId());
 
     auto* sc = static_cast<IDXGISwapChain*>(swapchain);
     g_sc = sc;
@@ -1400,6 +1401,7 @@ bool install(void* swapchain, const char* log_path) {
     }
     g_dev->GetImmediateContext(&g_ctx);
     if (!g_ctx) { g_dev->Release(); g_dev = nullptr; return false; }
+    log_line("# device creation flags %x; compiling shaders", g_dev->GetCreationFlags());
 
     g_ready = create_resources();
     log_line("# probe 3r install: resources %s", g_ready ? "ok" : "FAILED (see above)");
