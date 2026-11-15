@@ -393,6 +393,21 @@ void log_detail(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base, uint
 Map_t               g_orig_map    = nullptr;
 Unmap_t             g_orig_unmap  = nullptr;
 UpdateSubresource_t g_orig_update = nullptr;
+// Native D3D11 does not keep one fixed vtable on the immediate context, so the
+// hooks are tracked per vtable and checked again every frame. Each hook calls
+// the original that belongs to the vtable it was reached through.
+struct VtHook {
+    void** vt; DrawIndexed_t di; DrawIndexedInstanced_t dii;
+    Map_t map; Unmap_t unmap; UpdateSubresource_t upd;
+};
+constexpr int kMaxVt = 8;
+VtHook g_vts[kMaxVt] = {};
+int g_n_vt = 0, g_rehooked = 0, g_vt_logs = 0;
+inline const VtHook& vt_of(ID3D11DeviceContext* ctx) {
+    void** v = *reinterpret_cast<void***>(ctx);
+    for (int i = 0; i < g_n_vt; ++i) if (g_vts[i].vt == v) return g_vts[i];
+    return g_vts[0];
+}
 constexpr int kCbFloats = 160;
 struct CbShadow { ID3D11Resource* res; int n; float f[kCbFloats]; };
 constexpr int kCbTable = 1024;                 // power of two
@@ -428,6 +443,19 @@ int g_rej_range = 0, g_rej_order = 0, g_lost_tf = 0, g_diag_lines = 0;   // prob
 constexpr float kForeignDist = 1.5f;           // an unknown mesh with no copy this close is someone else's
 bool g_nearest = true;                         // of several copies of a mesh, outline the nearest only
 constexpr int kMaxLock = 512, kMaxPend = 128, kLearnFrames = 60;
+// Diagnostic: where each not-yet-known mesh was seen while waiting to be
+// learned, so the log can say whether our own pieces held learning up.
+struct SeenStat { uint64_t mk; int n_in, n_out; float maxd; };
+constexpr int kMaxSeen = 256;
+SeenStat g_seen[kMaxSeen];
+int g_n_seen = 0;
+void note_seen(uint64_t mk, float d, bool inside) {
+    SeenStat* e = nullptr;
+    for (int i = 0; i < g_n_seen; ++i) if (g_seen[i].mk == mk) { e = &g_seen[i]; break; }
+    if (!e) { if (g_n_seen >= kMaxSeen) return; e = &g_seen[g_n_seen++]; *e = SeenStat{mk, 0, 0, 0.0f}; }
+    if (inside) ++e->n_in; else ++e->n_out;
+    if (d > e->maxd) e->maxd = d;
+}
 LockedMesh g_lock[kMaxLock];
 int   g_n_lock = 0;
 uint64_t g_pend[kMaxPend];
@@ -535,7 +563,7 @@ void cb_store(ID3D11Resource* res, const void* data, UINT bytes) {
 
 HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub,
                                  D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE* out) {
-    const HRESULT hr = g_orig_map(ctx, res, sub, type, flags, out);
+    const HRESULT hr = vt_of(ctx).map(ctx, res, sub, type, flags, out);
     if (hr == S_OK && ctx == g_ctx && !g_in_hook && g_use_tf && res && out && sub == 0 &&
         (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE ||
          type == D3D11_MAP_WRITE_NO_OVERWRITE)) {
@@ -556,7 +584,7 @@ void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* ctx, ID3D11Resource* res, U
                 o.res = nullptr;
                 break;
             }
-    g_orig_unmap(ctx, res, sub);
+    vt_of(ctx).unmap(ctx, res, sub);
 }
 
 void STDMETHODCALLTYPE hk_UpdateSubresource(ID3D11DeviceContext* ctx, ID3D11Resource* res,
@@ -566,7 +594,7 @@ void STDMETHODCALLTYPE hk_UpdateSubresource(ID3D11DeviceContext* ctx, ID3D11Reso
         const UINT bytes = cb_bytes(res);
         if (bytes) { cb_store(res, src, bytes); ++g_cap_upd; }
     }
-    g_orig_update(ctx, res, sub, box, src, row_pitch, depth_pitch);
+    vt_of(ctx).upd(ctx, res, sub, box, src, row_pitch, depth_pitch);
 }
 
 // Horizontal distance in metres from the avatar to the nearest world transform
@@ -755,10 +783,12 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                             accept = false;
                             if (d <= g_ring_radius) ++g_foreign_near;
                         } else if (d <= g_tf_radius) {
+                            note_seen(mk, d, true);
                             bool have = false;
                             for (int i = 0; i < g_n_pend; ++i) if (g_pend[i] == mk) { have = true; break; }
                             if (!have && g_n_pend < kMaxPend) g_pend[g_n_pend++] = mk;
                         } else if (d <= g_ring_radius) {
+                            note_seen(mk, d, false);
                             ++g_ring;
                         }
                         if (g_n_lock > 0) accept = false;
@@ -834,14 +864,14 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                     if (known_notf) upload_params(ctx, vp, white, kDropGrow);
                     ctx->OMSetDepthStencilState(g_ds_always, 0);
                     ctx->Begin(sm.q_all);
-                    if (instanced) g_orig_dii(ctx, count, 1, start, base, start_inst);
-                    else           g_orig(ctx, count, start, base);
+                    if (instanced) vt_of(ctx).dii(ctx, count, 1, start, base, start_inst);
+                    else           vt_of(ctx).di(ctx, count, start, base);
                     ctx->End(sm.q_all);
 
                     ctx->OMSetDepthStencilState(g_ds_less, 0);
                     ctx->Begin(sm.q_in);
-                    if (instanced) g_orig_dii(ctx, count, 1, start, base, start_inst);
-                    else           g_orig(ctx, count, start, base);
+                    if (instanced) vt_of(ctx).dii(ctx, count, 1, start, base, start_inst);
+                    else           vt_of(ctx).di(ctx, count, start, base);
                     ctx->End(sm.q_in);
 
                     ctx->OMSetDepthStencilState(old_ds, old_ref);
@@ -867,8 +897,8 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 ctx->OMSetRenderTargets(1, &g_mask_rtv, nullptr);
                 ctx->OMSetBlendState(nullptr, factor, 0xffffffff);
                 ctx->PSSetShader(g_ps, nullptr, 0);
-                if (instanced) g_orig_dii(ctx, count, 1, start, base, start_inst);
-                else           g_orig(ctx, count, start, base);
+                if (instanced) vt_of(ctx).dii(ctx, count, 1, start, base, start_inst);
+                else           vt_of(ctx).di(ctx, count, start, base);
                 g_mask_vp_w = vp.Width; g_mask_vp_h = vp.Height;
                 ++g_masked;
             }
@@ -1029,25 +1059,82 @@ void read_samples() {
 
 void STDMETHODCALLTYPE hk_DrawIndexed(ID3D11DeviceContext* ctx, UINT index_count,
                                       UINT start, INT base) {
-    g_orig(ctx, index_count, start, base);
+    vt_of(ctx).di(ctx, index_count, start, base);
     after_draw(ctx, false, index_count, 1, start, base, 0);
 }
 
 void STDMETHODCALLTYPE hk_DrawIndexedInstanced(ID3D11DeviceContext* ctx,
                                                UINT ipi, UINT instances,
                                                UINT start, INT base, UINT start_inst) {
-    g_orig_dii(ctx, ipi, instances, start, base, start_inst);
+    vt_of(ctx).dii(ctx, ipi, instances, start, base, start_inst);
     after_draw(ctx, true, ipi, instances, start, base, start_inst);
 }
 
-bool patch_slot(int slot, void* fn, void** saved) {
+bool write_slot(void** vt, int slot, void* fn) {
     DWORD old = 0;
-    if (!VirtualProtect(&g_vtbl[slot], sizeof(void*), PAGE_READWRITE, &old))
-        return false;
-    if (saved) *saved = g_vtbl[slot];
-    g_vtbl[slot] = fn;
-    VirtualProtect(&g_vtbl[slot], sizeof(void*), old, &old);
+    if (!VirtualProtect(&vt[slot], sizeof(void*), PAGE_READWRITE, &old)) return false;
+    vt[slot] = fn;
+    VirtualProtect(&vt[slot], sizeof(void*), old, &old);
     return true;
+}
+
+// Puts our five hooks into one vtable, remembering what was there. Returns how
+// many slots had to be written, or -1 if the table is full or protected.
+int hook_vtable(void** vt) {
+    VtHook* h = nullptr;
+    for (int i = 0; i < g_n_vt; ++i) if (g_vts[i].vt == vt) { h = &g_vts[i]; break; }
+    if (!h) {
+        if (g_n_vt >= kMaxVt) return -1;
+        h = &g_vts[g_n_vt]; *h = VtHook{}; h->vt = vt;
+    }
+    struct { int slot; void* fn; void** saved; } slots[] = {
+        {kDrawIndexedSlot,          (void*)&hk_DrawIndexed,          (void**)&h->di},
+        {kDrawIndexedInstancedSlot, (void*)&hk_DrawIndexedInstanced, (void**)&h->dii},
+        {kMapSlot,                  (void*)&hk_Map,                  (void**)&h->map},
+        {kUnmapSlot,                (void*)&hk_Unmap,                (void**)&h->unmap},
+        {kUpdateSubresourceSlot,    (void*)&hk_UpdateSubresource,    (void**)&h->upd},
+    };
+    // Originals first, so a hook reached mid-way always has one to call.
+    for (auto& sl : slots) if (vt[sl.slot] != sl.fn) *sl.saved = vt[sl.slot];
+    if (h == &g_vts[g_n_vt]) ++g_n_vt;
+    int n = 0;
+    for (auto& sl : slots)
+        if (vt[sl.slot] != sl.fn) { if (!write_slot(vt, sl.slot, sl.fn)) return -1; ++n; }
+    return n;
+}
+
+const char* module_of(void* addr) {
+    static char path[MAX_PATH];
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)addr, &m) || !m || !GetModuleFileNameA(m, path, sizeof(path)))
+        return "?";
+    const char* b = std::strrchr(path, '\\');
+    return b ? b + 1 : path;
+}
+
+// Once a frame: the context may have moved to another vtable, or something may
+// have written over our slots. Hook again and say so in the log.
+void ensure_hooks() {
+    if (!g_ctx || g_n_vt == 0) return;
+    void** cur = *reinterpret_cast<void***>(g_ctx);
+    bool known = false;
+    for (int i = 0; i < g_n_vt; ++i) if (g_vts[i].vt == cur) known = true;
+    if (!known) {
+        const int n = hook_vtable(cur);
+        if (g_vt_logs < 40) { ++g_vt_logs;
+            log_line("# context vtable changed to %p: hooked %d slots, %d vtables known", (void*)cur, n, g_n_vt); }
+    }
+    for (int i = 0; i < g_n_vt; ++i) {
+        void* was = g_vts[i].vt[kDrawIndexedSlot];
+        const int n = hook_vtable(g_vts[i].vt);
+        if (n > 0) {
+            g_rehooked += n;
+            if (g_vt_logs < 40) { ++g_vt_logs;
+                log_line("# hooks were overwritten on vtable %p: restored %d slots (DrawIndexed was %p in %s)",
+                         (void*)g_vts[i].vt, n, was, module_of(was)); }
+        }
+    }
 }
 
 // Compiles the pixel shader and creates the buffer and blend state. Any
@@ -1178,19 +1265,24 @@ bool install(void* swapchain, const char* log_path) {
     }
 
     g_vtbl = *reinterpret_cast<void***>(g_ctx);
-    if (!patch_slot(kDrawIndexedSlot, (void*)&hk_DrawIndexed, (void**)&g_orig)) {
+    if (hook_vtable(g_vtbl) < 0) {
         std::snprintf(g_summary, sizeof(g_summary), "probe 3: vtable patch failed");
-        g_vtbl = nullptr;
+        g_vtbl = nullptr; g_n_vt = 0;
         return false;
     }
-    if (!patch_slot(kDrawIndexedInstancedSlot, (void*)&hk_DrawIndexedInstanced,
-                    (void**)&g_orig_dii))
-        g_orig_dii = nullptr;
-    if (!patch_slot(kMapSlot, (void*)&hk_Map, (void**)&g_orig_map)) g_orig_map = nullptr;
-    if (g_orig_map && !patch_slot(kUnmapSlot, (void*)&hk_Unmap, (void**)&g_orig_unmap))
-        g_orig_unmap = nullptr;
-    if (!patch_slot(kUpdateSubresourceSlot, (void*)&hk_UpdateSubresource, (void**)&g_orig_update))
-        g_orig_update = nullptr;
+    g_orig = g_vts[0].di; g_orig_dii = g_vts[0].dii;
+    g_orig_map = g_vts[0].map; g_orig_unmap = g_vts[0].unmap; g_orig_update = g_vts[0].upd;
+    log_line("# context vtable %p in %s; DrawIndexed original %p in %s", (void*)g_vtbl, module_of(g_vtbl),
+             (void*)g_orig, module_of((void*)g_orig));
+    {
+        ID3D11DeviceContext* dc = nullptr;
+        if (SUCCEEDED(g_dev->CreateDeferredContext(0, &dc)) && dc) {
+            void** dv = *reinterpret_cast<void***>(dc);
+            log_line("# deferred context vtable %p (%s), DrawIndexed %p", (void*)dv,
+                     dv == g_vtbl ? "same as immediate" : "different", dv[kDrawIndexedSlot]);
+            dc->Release();
+        }
+    }
     {   // Why no draws might reach the hooks: the game recording on deferred contexts.
         D3D11_FEATURE_DATA_THREADING th{};
         const HRESULT hr = g_dev->CheckFeatureSupport(D3D11_FEATURE_THREADING, &th, sizeof(th));
@@ -1205,13 +1297,15 @@ bool install(void* swapchain, const char* log_path) {
 }
 
 void shutdown() {
-    if (g_vtbl) {
-        if (g_orig)     patch_slot(kDrawIndexedSlot, (void*)g_orig, nullptr);
-        if (g_orig_dii) patch_slot(kDrawIndexedInstancedSlot, (void*)g_orig_dii, nullptr);
-        if (g_orig_map)    patch_slot(kMapSlot, (void*)g_orig_map, nullptr);
-        if (g_orig_unmap)  patch_slot(kUnmapSlot, (void*)g_orig_unmap, nullptr);
-        if (g_orig_update) patch_slot(kUpdateSubresourceSlot, (void*)g_orig_update, nullptr);
+    for (int i = 0; i < g_n_vt; ++i) {
+        const VtHook& h = g_vts[i];
+        if (h.di)    write_slot(h.vt, kDrawIndexedSlot, (void*)h.di);
+        if (h.dii)   write_slot(h.vt, kDrawIndexedInstancedSlot, (void*)h.dii);
+        if (h.map)   write_slot(h.vt, kMapSlot, (void*)h.map);
+        if (h.unmap) write_slot(h.vt, kUnmapSlot, (void*)h.unmap);
+        if (h.upd)   write_slot(h.vt, kUpdateSubresourceSlot, (void*)h.upd);
     }
+    g_n_vt = 0;
     g_orig = nullptr; g_orig_dii = nullptr; g_vtbl = nullptr;
     g_orig_map = nullptr; g_orig_unmap = nullptr; g_orig_update = nullptr;
     g_ready = false;
@@ -1242,6 +1336,7 @@ void shutdown() {
 
 void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
                float backbuffer_w, float backbuffer_h) {
+    ensure_hooks();
     // Close out the frame that just finished.
     if (g_ready) composite();
     if (g_sampling) { g_sampling = false; g_samp_age = 0; }
@@ -1333,6 +1428,20 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
                 }
             if (added) log_line("# gear lock: learned %d meshes, %d known, %d foreign", added,
                                 g_n_lock, g_foreign.n);
+            if (added) {
+                int own_ring = 0, other = 0;
+                for (int i = 0; i < g_n_seen; ++i) {
+                    const SeenStat& e = g_seen[i];
+                    if (find_lock(e.mk)) {
+                        if (e.n_out > 0) ++own_ring;
+                        log_line("#   learned %016llx: draws near %d, beyond %.1f m %d, farthest %.2f m",
+                                 (unsigned long long)e.mk, e.n_in, g_tf_radius, e.n_out, e.maxd);
+                    } else ++other;
+                }
+                log_line("#   while waiting: %d learned pieces were seen beyond %.1f m, %d other meshes seen within %.1f m",
+                         own_ring, g_tf_radius, other, g_ring_radius);
+            }
+            g_n_seen = 0;
             g_alone_streak = 0;
         }
     } else if (g_ring > 0 || crowded) {
@@ -1346,8 +1455,8 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     {   // Probe 3r: say why nothing is being learned, every ~5 s.
         static int tick = 0;
         if (++tick >= 300) { tick = 0;
-            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d | %s",
-                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_summary); g_other_draws = 0; }
+            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, re-hooked %d | %s",
+                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_n_vt, g_rehooked, g_summary); g_other_draws = 0; }
     }
     g_p2_rej = 0; g_rej_range = 0; g_rej_order = 0; g_lost_tf = 0;
     g_last_ring = g_ring; g_n_pend = 0; g_ring = 0; g_foreign_near = 0;
@@ -1388,7 +1497,7 @@ float* learn_range() { return &g_ring_radius; }
 void set_mounted(bool m) { g_mounted = m; }
 void set_log_limit(int lines) { g_log_limit = lines; }
 void forget_gear() {
-    g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear();
+    g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear(); g_n_seen = 0;
 }
 // A new map reloads every model, and another character wears other gear:
 // either way every mesh id we hold is stale.
