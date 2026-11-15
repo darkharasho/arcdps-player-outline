@@ -413,6 +413,13 @@ bool  g_inline = false, g_inline_failed = false;
 int   g_lost_frames = 0;
 void* g_inl_target[3] = {};   // DrawIndexed, DrawIndexedInstanced, UpdateSubresource
 void* g_inl_tramp[3]  = {};
+// Inline mode starts in steps, each announced in the log, so that a crash can
+// be pinned on one of them: nothing hooked for kInlineWait frames, then hooks
+// that only pass the call on, then reading constant buffers, then the outline.
+constexpr int kInlineWait = 600, kStageFrames = 300;
+int g_hook_frames = 0;    // frames since install
+int g_inl_frames = -1;    // frames since inline hooks went live, -1 = not inline
+inline bool stage_ok(int stage) { return !g_inline || g_inl_frames >= (stage - 1) * kStageFrames; }
 inline const VtHook& vt_of(ID3D11DeviceContext* ctx) {
     void** v = *reinterpret_cast<void***>(ctx);
     for (int i = 0; i < g_n_vt; ++i) if (g_vts[i].vt == v) return g_vts[i];
@@ -600,7 +607,7 @@ void cb_store(ID3D11Resource* res, const void* data, UINT bytes) {
 HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub,
                                  D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE* out) {
     const HRESULT hr = vt_of(ctx).map(ctx, res, sub, type, flags, out);
-    if (hr == S_OK && ctx == g_ctx && !g_in_hook && g_use_tf && res && out && sub == 0 &&
+    if (hr == S_OK && ctx == g_ctx && !g_in_hook && g_use_tf && res && out && sub == 0 && stage_ok(2) &&
         (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE ||
          type == D3D11_MAP_WRITE_NO_OVERWRITE)) {
         const UINT bytes = cb_bytes(res);
@@ -612,7 +619,7 @@ HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* ctx, ID3D11Resource* res, 
 }
 
 void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub) {
-    if (ctx == g_ctx && sub == 0)
+    if (ctx == g_ctx && sub == 0 && stage_ok(2))
         for (auto& o : g_open)
             if (o.res == res) {
                 cb_store(res, o.data, o.bytes);
@@ -626,7 +633,7 @@ void STDMETHODCALLTYPE hk_Unmap(ID3D11DeviceContext* ctx, ID3D11Resource* res, U
 void STDMETHODCALLTYPE hk_UpdateSubresource(ID3D11DeviceContext* ctx, ID3D11Resource* res,
                                             UINT sub, const D3D11_BOX* box, const void* src,
                                             UINT row_pitch, UINT depth_pitch) {
-    if (ctx == g_ctx && !g_in_hook && g_use_tf && res && src && sub == 0 && !box) {
+    if (ctx == g_ctx && !g_in_hook && g_use_tf && res && src && sub == 0 && !box && stage_ok(2)) {
         const UINT bytes = cb_bytes(res);
         if (bytes) { cb_store(res, src, bytes); ++g_cap_upd; }
     }
@@ -680,6 +687,7 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
     if (ctx != g_ctx) { ++g_other_draws; return; }
     if (g_in_hook) return;
     ++g_draws;
+    if (!stage_ok(3)) return;
     if (!g_ready || !g_outline || count < kMinIndices || instances != 1) return;
     if (GetTickCount64() - g_frame_ms > 250) return;
     g_in_hook = true;
@@ -1211,13 +1219,14 @@ bool go_inline(const char* why) {
         }
     }
     g_orig = g_vts[0].di; g_orig_dii = g_vts[0].dii; g_orig_update = g_vts[0].upd;
-    g_inline = true;
+    g_inline = true; g_inl_frames = 0;
+    log_line("# inline hooks: about to patch %p, %p, %p in %s (%s)", targets[0], targets[1], targets[2],
+             module_of(targets[0]), why);
     for (int k = 0; k < 3; ++k) {
         const MH_STATUS st = MH_EnableHook(targets[k]);
         if (st != MH_OK) log_line("# inline hooks: enabling %p failed (%s)", targets[k], MH_StatusToString(st));
     }
-    log_line("# inline hooks on (%s): DrawIndexed %p, DrawIndexedInstanced %p, UpdateSubresource %p in %s",
-             why, targets[0], targets[1], targets[2], module_of(targets[0]));
+    log_line("# inline hooks on, step 1 of 3: calls are only passed on");
     return true;
 }
 
@@ -1262,8 +1271,17 @@ void ensure_hooks() {
         }
     }
     g_rehooked = lost;
-    if (restored) { if (++g_lost_frames >= 3) go_inline("the runtime restored its own functions"); }
-    else g_lost_frames = 0;
+    ++g_hook_frames;
+    if (g_inline) {
+        ++g_inl_frames;
+        if (g_inl_frames == kStageFrames) log_line("# inline hooks, step 2 of 3: reading constant buffers (%d draws last frame)", g_draws);
+        if (g_inl_frames == 2 * kStageFrames) log_line("# inline hooks, step 3 of 3: outline on");
+    }
+    if (restored) {
+        if (g_lost_frames++ == 0)
+            log_line("# the runtime restored its own draw functions; inline hooks in %d frames", kInlineWait);
+        if (g_hook_frames >= kInlineWait) go_inline("the runtime restored its own functions");
+    } else g_lost_frames = 0;
 }
 
 // Compiles the pixel shader and creates the buffer and blend state. Any
