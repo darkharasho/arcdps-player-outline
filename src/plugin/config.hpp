@@ -21,6 +21,7 @@ struct Config {
     float       body_color[3]  = {0.2f, 1.0f, 0.9f};
     float       body_thickness = 3.0f;    // px
     float       body_fill      = 0.15f;   // 0..0.6
+    float       body_fill_color[3] = {0.2f, 1.0f, 0.9f};   // inside shading
     // Per-mode gates (structured PvP is always off, not configurable).
     bool        show_in_pve = true;
     bool        show_in_wvw = true;

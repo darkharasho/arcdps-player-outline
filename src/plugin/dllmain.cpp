@@ -114,6 +114,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
         *spike::thickness() = g_cfg.body_thickness;
         *spike::fill() = g_cfg.body_fill;
         for (int i = 0; i < 3; ++i) spike::outline_rgb()[i] = g_cfg.body_color[i];
+        for (int i = 0; i < 3; ++i) spike::fill_rgb()[i] = g_cfg.body_fill_color[i];
 #endif
         spike::set_mounted(session.mounted);
         spike::set_long_body(session.race == core::GameRace::Charr);
@@ -127,6 +128,7 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
         if (ImGui::Begin("player outline probe 3r", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing)) {
             ImGui::Checkbox("Outline", spike::outline_flag());
             ImGui::ColorEdit3("Colour", spike::outline_rgb(), ImGuiColorEditFlags_NoInputs);
+            ImGui::ColorEdit3("Fill colour", spike::fill_rgb(), ImGuiColorEditFlags_NoInputs);
             ImGui::SetNextItemWidth(180.0f);
             ImGui::SliderFloat("Thickness (px)", spike::thickness(), 1.0f, 8.0f, "%.0f", ImGuiSliderFlags_NoInput);
             ImGui::SetNextItemWidth(180.0f);
@@ -300,6 +302,7 @@ static uintptr_t options_cb() {
     if (g_cfg.body_outline) {
         ImGui::ColorEdit3("Character outline color", g_cfg.body_color);
         ImGui::SliderFloat("Character outline thickness", &g_cfg.body_thickness, 1.0f, 8.0f, "%.0f px");
+        ImGui::ColorEdit3("Character fill color", g_cfg.body_fill_color);
         ImGui::SliderFloat("Character fill", &g_cfg.body_fill, 0.0f, 0.6f, "%.2f");
         if (ImGui::Button("Re-learn my gear")) spike::forget_gear();
         ImGui::TextDisabled("Learns your gear while no other player is within a few metres.");

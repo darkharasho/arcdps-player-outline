@@ -169,3 +169,30 @@ TEST_CASE("check_updates round-trips and defaults to on") {
     std::remove(path);
     CHECK(c.check_updates == true);
 }
+
+TEST_CASE("character fill colour round-trips separately from the outline colour") {
+    const char* path = "test_config_fill_color.ini";
+    Config a;
+    a.body_color[0] = 1.0f; a.body_color[1] = 0.0f; a.body_color[2] = 0.0f;
+    a.body_fill_color[0] = 0.0f; a.body_fill_color[1] = 0.0f; a.body_fill_color[2] = 1.0f;
+    save_config(a, path);
+    Config b;
+    load_config(b, path);
+    std::remove(path);
+    CHECK(b.body_color[0] == doctest::Approx(1.0f));
+    CHECK(b.body_fill_color[0] == doctest::Approx(0.0f));
+    CHECK(b.body_fill_color[2] == doctest::Approx(1.0f));
+}
+
+TEST_CASE("an ini without fill colour keys fills with the outline colour") {
+    const char* path = "test_config_fill_legacy.ini";
+    FILE* f = std::fopen(path, "w");
+    std::fprintf(f, "bc_r=0.5\nbc_g=0.25\nbc_b=0.75\n");
+    std::fclose(f);
+    Config c;
+    load_config(c, path);
+    std::remove(path);
+    CHECK(c.body_fill_color[0] == doctest::Approx(0.5f));
+    CHECK(c.body_fill_color[1] == doctest::Approx(0.25f));
+    CHECK(c.body_fill_color[2] == doctest::Approx(0.75f));
+}

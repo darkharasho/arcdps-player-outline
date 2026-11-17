@@ -76,7 +76,7 @@ Everything applies live; settings persist to `arcdps_player_outline.ini` on exit
 
 Tick **Character outline (experimental)** at the bottom of the options panel. It is off by default and works independently of the marker, so you can run either or both. Like the marker, it is off in structured PvP.
 
-- **Color / thickness / fill** — the outline colour, its width in pixels, and how strongly the inside of the silhouette is tinted.
+- **Color / fill color / thickness / fill** — the outline colour, the colour of the inside shading (separate from the outline), the outline width in pixels, and how strongly the inside of the silhouette is tinted.
 - **Re-learn my gear** — forgets what it has learned and starts again. Use it if the outline is missing a piece or has picked up something that isn't yours.
 
 **How it learns your gear.** The plugin has to work out which of the game's draw calls are your character. It learns them in the first second or so that **no other player is within a few metres of you**, then outlines only those pieces, which is what keeps it clean inside a stack. If you log in or swap gear while standing in a crowd, the outline stays incomplete until you step clear of other players for a moment.

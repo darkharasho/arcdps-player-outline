@@ -53,6 +53,7 @@ const char kPixelShader[] =
     "  float4 vp;\n"           // viewport x, y, width, height
     "  float4 misc;\n"         // x metres above feet, y metres below feet
     "  float4 color;\n"
+    "  float4 fill_color;\n"
     "};\n"
     "float inside(float3 world) {\n"
     "  float3 d = world - avatar.xyz;\n"
@@ -96,7 +97,7 @@ const char kPixelShader[] =
     "  float m = mask_tex.Load(int3(c, 0)).r;\n"
     "  if (m > 0.5) {\n"
     "    if (misc.w <= 0.0) discard;\n"
-    "    return float4(color.rgb, misc.w);\n"
+    "    return float4(fill_color.rgb, misc.w);\n"
     "  }\n"
     "  float mx = 0.0;\n"
     "  for (int i = 0; i < 16; i++) {\n"
@@ -118,6 +119,7 @@ struct Params {
     float vp[4];
     float misc[4];
     float color[4];
+    float fill_color[4];   // inside of the outline (edge pass only)
 };
 
 ID3D11Device*        g_dev  = nullptr;
@@ -156,6 +158,7 @@ float g_margin    = 1.2f;   // metres the mask cylinder is wider than the learni
 float g_learn_pct = 85.0f;  // share of a draw that must be inside to be learned
 float g_fill      = 0.15f;
 float g_rgb[3]    = {0.2f, 1.0f, 0.9f};
+float g_fill_rgb[3] = {0.2f, 1.0f, 0.9f};
 int   g_masked = 0;                               // mask draws this frame
 
 // Learned set: draws that sat (almost) wholly inside the cylinder when last
@@ -1018,6 +1021,8 @@ void composite() {
     p.misc[2] = g_thickness * p.vp[1];
     p.misc[3] = g_fill;
     p.color[0] = g_rgb[0]; p.color[1] = g_rgb[1]; p.color[2] = g_rgb[2]; p.color[3] = 1.0f;
+    p.fill_color[0] = g_fill_rgb[0]; p.fill_color[1] = g_fill_rgb[1];
+    p.fill_color[2] = g_fill_rgb[2]; p.fill_color[3] = 1.0f;
     ctx->UpdateSubresource(g_cb, 0, nullptr, &p, 0, 0);
 
     D3D11_VIEWPORT vp{0.0f, 0.0f, (float)bd.Width, (float)bd.Height, 0.0f, 1.0f};
@@ -1680,6 +1685,7 @@ bool*  nearest_only() { return &g_nearest; }
 float* transform_radius() { return &g_tf_radius; }
 float* learn_pct() { return &g_learn_pct; }
 float* outline_rgb() { return g_rgb; }
+float* fill_rgb()    { return g_fill_rgb; }
 int detail_count() { return g_detail_no; }
 void log_learned() {
     g_detail_armed = true;

@@ -22,6 +22,8 @@ void save_config(const Config& c, const char* path) {
     std::fprintf(f, "body_outline=%d\nbc_r=%.4f\nbc_g=%.4f\nbc_b=%.4f\nbody_thickness=%.4f\nbody_fill=%.4f\n",
                  c.body_outline ? 1 : 0, c.body_color[0], c.body_color[1], c.body_color[2],
                  c.body_thickness, c.body_fill);
+    std::fprintf(f, "bf_r=%.4f\nbf_g=%.4f\nbf_b=%.4f\n",
+                 c.body_fill_color[0], c.body_fill_color[1], c.body_fill_color[2]);
     std::fprintf(f, "ring_radius=%.4f\n", c.ring_radius);
     std::fprintf(f, "glow_width=%.4f\nglow_amount=%.4f\nchar_height=%.4f\n",
                  c.glow_width, c.glow_amount, c.char_height);
@@ -56,6 +58,7 @@ static void sanitize(Config& c) {
     c.opacity       = clampf(c.opacity, 0.05f, 1.0f);
     c.outline_width = clampf(c.outline_width, 0.5f, 8.0f);
     for (int i = 0; i < 3; ++i) c.body_color[i] = clampf(c.body_color[i], 0.0f, 1.0f);
+    for (int i = 0; i < 3; ++i) c.body_fill_color[i] = clampf(c.body_fill_color[i], 0.0f, 1.0f);
     c.body_thickness = clampf(c.body_thickness, 1.0f, 8.0f);
     c.body_fill      = clampf(c.body_fill, 0.0f, 0.6f);
     // ring_radius changed units (px -> meters); a wildly out-of-range value is a
@@ -85,6 +88,7 @@ void load_config(Config& c, const char* path) {
     float v;
     int  old_style = -1;    // legacy MarkerStyle value, if seen
     bool saw_show  = false; // any explicit show_* key present?
+    bool saw_fill_color = false; // bf_* keys present? (older inis have one shared colour)
     while (std::fscanf(f, " %31[^=\n]=%f", key, &v) == 2) {
         if      (!std::strcmp(key, "enabled"))      c.enabled = (v != 0);
         else if (!std::strcmp(key, "show_in_pve"))  c.show_in_pve = (v != 0);
@@ -111,6 +115,9 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "bc_b"))           c.body_color[2] = v;
         else if (!std::strcmp(key, "body_thickness")) c.body_thickness = v;
         else if (!std::strcmp(key, "body_fill"))      c.body_fill = v;
+        else if (!std::strcmp(key, "bf_r")) { c.body_fill_color[0] = v; saw_fill_color = true; }
+        else if (!std::strcmp(key, "bf_g")) { c.body_fill_color[1] = v; saw_fill_color = true; }
+        else if (!std::strcmp(key, "bf_b")) { c.body_fill_color[2] = v; saw_fill_color = true; }
         else if (!std::strcmp(key, "ring_radius"))  c.ring_radius = v;
         else if (!std::strcmp(key, "glow_width"))   c.glow_width = v;
         else if (!std::strcmp(key, "glow_amount"))  c.glow_amount = v;
@@ -137,6 +144,9 @@ void load_config(Config& c, const char* path) {
         else if (!std::strcmp(key, "hide_when_unfocused")) c.hide_when_unfocused = (v != 0);
     }
     std::fclose(f);
+    // Before the fill had its own colour it used the outline colour; keep that look.
+    if (!saw_fill_color)
+        for (int i = 0; i < 3; ++i) c.body_fill_color[i] = c.body_color[i];
     // Migrate a legacy single-style config only when no explicit element toggles
     // were present — explicit show_* keys always win.
     if (!saw_show && old_style >= 0) {

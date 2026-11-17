@@ -48,6 +48,7 @@ bool*  nearest_only();     // of several copies of a learned mesh, outline the n
 bool*  rigid_pieces();     // let rigid pieces that carry a transform take part
 float* fill();           // opacity of the fill inside the outline
 float* outline_rgb();    // 3 floats
+float* fill_rgb();       // 3 floats, colour of the fill inside the outline
 void log_learned();      // log the learned set and every learned draw's bound state
 int detail_count();      // how many times that has been done
 const char* last_summary();
