@@ -87,14 +87,20 @@ const char kPixelShader[] =
     // Probe 3e: outline pass. The mask holds 1 where a learned piece was
     // redrawn. For this entry point vp.xy = mask pixels per backbuffer pixel,
     // misc.z = thickness in pixels, misc.w = fill opacity.
+    // misc.x = 1 when the held mask (the last frame with all its pieces) is
+    // merged in, so a frame missing pieces does not blink the fill.
     "Texture2D mask_tex : register(t0);\n"
+    "Texture2D hold_tex : register(t1);\n"
+    "float mask_at(int2 c) {\n"
+    "  return max(mask_tex.Load(int3(c, 0)).r, hold_tex.Load(int3(c, 0)).r * misc.x);\n"
+    "}\n"
     "float4 vs_full(uint id : SV_VertexID) : SV_Position {\n"
     "  float2 uv = float2((id << 1) & 2, id & 2);\n"
     "  return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);\n"
     "}\n"
     "float4 main_edge(float4 p : SV_Position) : SV_Target {\n"
     "  int2 c = int2(p.xy * vp.xy);\n"
-    "  float m = mask_tex.Load(int3(c, 0)).r;\n"
+    "  float m = mask_at(c);\n"
     "  if (m > 0.5) {\n"
     "    if (misc.w <= 0.0) discard;\n"
     "    return float4(fill_color.rgb, misc.w);\n"
@@ -103,8 +109,8 @@ const char kPixelShader[] =
     "  for (int i = 0; i < 16; i++) {\n"
     "    float a = i * 0.3926991;\n"
     "    float2 d = float2(cos(a), sin(a)) * misc.z;\n"
-    "    mx = max(mx, mask_tex.Load(int3(c + int2(round(d)), 0)).r);\n"
-    "    mx = max(mx, mask_tex.Load(int3(c + int2(round(d * 0.5)), 0)).r);\n"
+    "    mx = max(mx, mask_at(c + int2(round(d))));\n"
+    "    mx = max(mx, mask_at(c + int2(round(d * 0.5))));\n"
     "  }\n"
     "  if (mx < 0.5) discard;\n"
     "  return float4(color.rgb, 1.0);\n"
@@ -160,6 +166,17 @@ float g_fill      = 0.15f;
 float g_rgb[3]    = {0.2f, 1.0f, 0.9f};
 float g_fill_rgb[3] = {0.2f, 1.0f, 0.9f};
 int   g_masked = 0;                               // mask draws this frame
+// The mask as it was on the last frame that had all its pieces. A frame that
+// comes up short (a piece rejected, or nothing drawn at all) merges it in for
+// a few frames: one such frame blinked the whole fill, very visible at high
+// fill opacity.
+ID3D11Texture2D*          g_hold_tex = nullptr;
+ID3D11ShaderResourceView* g_hold_srv = nullptr;
+int g_mask_n = 0;           // mask draws since the last composite
+int g_hold_n = 0;           // mask draws the held copy had
+int g_hold_age = 0;         // frames the held copy has stood in
+constexpr int kHoldFrames = 4;
+int g_held_frames = 0, g_empty_frames = 0, g_skipped_frames = 0;   // for the 3r log line
 
 // Learned set: draws that sat (almost) wholly inside the cylinder when last
 // sampled. A key is shaders + index buffer + index range.
@@ -288,6 +305,9 @@ bool ensure_mask(ID3D11RenderTargetView* rtv) {
     if (g_mask_srv) { g_mask_srv->Release(); g_mask_srv = nullptr; }
     if (g_mask_rtv) { g_mask_rtv->Release(); g_mask_rtv = nullptr; }
     if (g_mask_tex) { g_mask_tex->Release(); g_mask_tex = nullptr; }
+    if (g_hold_srv) { g_hold_srv->Release(); g_hold_srv = nullptr; }
+    if (g_hold_tex) { g_hold_tex->Release(); g_hold_tex = nullptr; }
+    g_hold_n = 0; g_hold_age = 0; g_mask_n = 0;
     D3D11_TEXTURE2D_DESC md{};
     md.Width = td.Width; md.Height = td.Height;
     md.MipLevels = 1; md.ArraySize = 1;
@@ -297,8 +317,12 @@ bool ensure_mask(ID3D11RenderTargetView* rtv) {
     md.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     if (FAILED(g_dev->CreateTexture2D(&md, nullptr, &g_mask_tex)) ||
         FAILED(g_dev->CreateRenderTargetView(g_mask_tex, nullptr, &g_mask_rtv)) ||
-        FAILED(g_dev->CreateShaderResourceView(g_mask_tex, nullptr, &g_mask_srv))) {
+        FAILED(g_dev->CreateShaderResourceView(g_mask_tex, nullptr, &g_mask_srv)) ||
+        FAILED(g_dev->CreateTexture2D(&md, nullptr, &g_hold_tex)) ||
+        FAILED(g_dev->CreateShaderResourceView(g_hold_tex, nullptr, &g_hold_srv))) {
         log_line("# mask target %ux%u failed", td.Width, td.Height);
+        if (g_hold_srv) { g_hold_srv->Release(); g_hold_srv = nullptr; }
+        if (g_hold_tex) { g_hold_tex->Release(); g_hold_tex = nullptr; }
         if (g_mask_srv) { g_mask_srv->Release(); g_mask_srv = nullptr; }
         if (g_mask_rtv) { g_mask_rtv->Release(); g_mask_rtv = nullptr; }
         if (g_mask_tex) { g_mask_tex->Release(); g_mask_tex = nullptr; }
@@ -462,6 +486,7 @@ int g_other_draws = 0;   // draws seen on a context that is not the immediate on
 unsigned g_map_id = 0, g_char_id = 0;
 unsigned long long g_last_tick = 0;
 int g_rej_range = 0, g_rej_order = 0, g_lost_tf = 0, g_diag_lines = 0;   // probe 3r diagnostics
+int g_cam_rel = 0, g_world_rel = 0;   // near draws matched in camera / world space, per 3r line
 constexpr float kForeignDist = 1.5f;           // an unknown mesh with no copy this close is someone else's
 bool g_nearest = true;                         // of several copies of a mesh, outline the nearest only
 constexpr float kPass2Slack = 0.75f;           // metres a second-pass copy may be farther than the first-pass one
@@ -660,17 +685,28 @@ float transform_distance(ID3D11DeviceContext* ctx, bool* skinned) {
     cb->Release();
     if (!c || c->n < 12) return -1.0f;
     const float k = 39.3701f;
-    const float tx = g_avatar.x * k, ty = g_avatar.z * k, tz = -g_avatar.y * k;
+    // Some maps hand over transforms relative to the camera, not the world:
+    // there our own pieces measured as far as the camera is behind us (5-9 m)
+    // and were dropped as someone else's. Measure in both spaces.
+    const core::Vec3 rel = g_avatar - g_cam_pos;
+    const float tgt[2][3] = {{g_avatar.x * k, g_avatar.z * k, -g_avatar.y * k},
+                             {rel.x * k, rel.z * k, -rel.y * k}};
     float best = -1.0f;
-    for (int o = 0; o + 8 < c->n; ++o) {
-        const float dv = c->f[o + 8] - tz;        // negative is up
-        if (!(dv > -160.0f && dv < 80.0f)) continue;
-        const float dx = c->f[o] - tx, dy = c->f[o + 4] - ty;
-        const float d2 = dx * dx + dy * dy;
-        if (!(d2 < 400.0f * 400.0f)) continue;
-        const float d = std::sqrt(d2) / k;
-        if (best < 0.0f || d < best) best = d;
+    bool best_rel = false;
+    for (int s = 0; s < 2; ++s) {
+        const float tx = tgt[s][0], ty = tgt[s][1], tz = tgt[s][2];
+        for (int o = 0; o + 8 < c->n; ++o) {
+            const float dv = c->f[o + 8] - tz;        // negative is up
+            if (!(dv > -160.0f && dv < 80.0f)) continue;
+            const float dx = c->f[o] - tx, dy = c->f[o + 4] - ty;
+            const float d2 = dx * dx + dy * dy;
+            if (!(d2 < 400.0f * 400.0f)) continue;
+            const float d = std::sqrt(d2) / k;
+            if (best < 0.0f || d < best) { best = d; best_rel = s == 1; }
+        }
     }
+    if (best_rel && best <= g_lock_radius) ++g_cam_rel;
+    else if (best >= 0.0f && best <= g_lock_radius) ++g_world_rel;
     return best;
 }
 
@@ -958,6 +994,7 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 else           vt_of(ctx).di(ctx, count, start, base);
                 g_mask_vp_w = vp.Width; g_mask_vp_h = vp.Height;
                 ++g_masked;
+                ++g_mask_n;
             }
 
             ctx->PSSetConstantBuffers(kCbSlot, 1, &old_cb);
@@ -982,9 +1019,27 @@ void composite() {
     if (!g_mask_rtv) return;
     ID3D11DeviceContext* ctx = g_ctx;
     const FLOAT zero[4] = {0, 0, 0, 0};
-    if (g_masked == 0 || !g_outline || !g_sc || !g_vs_full || !g_ps_edge || !g_rs_plain) {
+    const int n = g_mask_n;
+    g_mask_n = 0;
+    if (!g_outline || !g_sc || !g_vs_full || !g_ps_edge || !g_rs_plain) {
         ctx->ClearRenderTargetView(g_mask_rtv, zero);
+        g_hold_n = 0; g_hold_age = 0;
         return;
+    }
+    // Fewer pieces than the held frame had: merge the held copy in, for a few
+    // frames at most (a piece really gone, a mount, a gear change).
+    const bool use_hold = n < g_hold_n && g_hold_age < kHoldFrames && g_hold_tex;
+    if (use_hold) {
+        ++g_hold_age; ++g_held_frames;
+        if (n == 0) ++g_empty_frames;
+    } else {
+        if (n > 0 && g_hold_tex) ctx->CopyResource(g_hold_tex, g_mask_tex);
+        g_hold_n = n; g_hold_age = 0;
+        if (n == 0) {
+            if (g_n_lock > 0) ++g_empty_frames;
+            ctx->ClearRenderTargetView(g_mask_rtv, zero);
+            return;
+        }
     }
     ID3D11Texture2D* bb = nullptr;
     if (FAILED(g_sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return;
@@ -1012,10 +1067,11 @@ void composite() {
     ID3D11VertexShader* o_vs = nullptr;           ctx->VSGetShader(&o_vs, nullptr, nullptr);
     ID3D11PixelShader* o_ps = nullptr;            ctx->PSGetShader(&o_ps, nullptr, nullptr);
     ID3D11GeometryShader* o_gs = nullptr;         ctx->GSGetShader(&o_gs, nullptr, nullptr);
-    ID3D11ShaderResourceView* o_srv = nullptr;    ctx->PSGetShaderResources(0, 1, &o_srv);
+    ID3D11ShaderResourceView* o_srv[2] = {};      ctx->PSGetShaderResources(0, 2, o_srv);
     ID3D11Buffer* o_cb = nullptr;                 ctx->PSGetConstantBuffers(kCbSlot, 1, &o_cb);
 
     Params p{};
+    p.misc[0] = use_hold ? 1.0f : 0.0f;
     p.vp[0] = g_mask_vp_w / (float)bd.Width;
     p.vp[1] = g_mask_vp_h / (float)bd.Height;
     p.misc[2] = g_thickness * p.vp[1];
@@ -1037,11 +1093,12 @@ void composite() {
     ctx->VSSetShader(g_vs_full, nullptr, 0);
     ctx->GSSetShader(nullptr, nullptr, 0);
     ctx->PSSetShader(g_ps_edge, nullptr, 0);
-    ctx->PSSetShaderResources(0, 1, &g_mask_srv);
+    ID3D11ShaderResourceView* srvs[2] = {g_mask_srv, g_hold_srv};
+    ctx->PSSetShaderResources(0, 2, srvs);
     ctx->PSSetConstantBuffers(kCbSlot, 1, &g_cb);
     ctx->Draw(3, 0);
 
-    ctx->PSSetShaderResources(0, 1, &o_srv);
+    ctx->PSSetShaderResources(0, 2, o_srv);
     ctx->PSSetConstantBuffers(kCbSlot, 1, &o_cb);
     ctx->PSSetShader(o_ps, nullptr, 0);
     ctx->GSSetShader(o_gs, nullptr, 0);
@@ -1064,7 +1121,7 @@ void composite() {
     if (o_vs) o_vs->Release();
     if (o_ps) o_ps->Release();
     if (o_gs) o_gs->Release();
-    if (o_srv) o_srv->Release();
+    for (auto* v : o_srv) if (v) v->Release();
     if (o_cb) o_cb->Release();
     bb_rtv->Release();
     g_in_hook = false;
@@ -1485,6 +1542,9 @@ void shutdown() {
     if (g_mask_srv) { g_mask_srv->Release(); g_mask_srv = nullptr; }
     if (g_mask_rtv) { g_mask_rtv->Release(); g_mask_rtv = nullptr; }
     if (g_mask_tex) { g_mask_tex->Release(); g_mask_tex = nullptr; }
+    if (g_hold_srv) { g_hold_srv->Release(); g_hold_srv = nullptr; }
+    if (g_hold_tex) { g_hold_tex->Release(); g_hold_tex = nullptr; }
+    g_hold_n = 0; g_hold_age = 0; g_mask_n = 0;
     if (g_rs_plain) { g_rs_plain->Release(); g_rs_plain = nullptr; }
     if (g_ps_edge)  { g_ps_edge->Release();  g_ps_edge = nullptr; }
     if (g_vs_full)  { g_vs_full->Release();  g_vs_full = nullptr; }
@@ -1500,6 +1560,17 @@ void shutdown() {
     if (g_ps)    { g_ps->Release();    g_ps = nullptr; }
     if (g_ctx)   { g_ctx->Release();   g_ctx = nullptr; }
     if (g_dev)   { g_dev->Release();   g_dev = nullptr; }
+}
+
+void present_only(bool draw) {
+    if (!g_ready) return;
+    if (draw) { ++g_skipped_frames; composite(); return; }
+    // Hidden or loading: throw this frame's mask away so it does not pile up.
+    if (g_mask_rtv) {
+        const FLOAT zero[4] = {0, 0, 0, 0};
+        g_ctx->ClearRenderTargetView(g_mask_rtv, zero);
+    }
+    g_mask_n = 0; g_hold_n = 0; g_hold_age = 0;
 }
 
 void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
@@ -1623,8 +1694,10 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
     {   // Probe 3r: say why nothing is being learned, every ~5 s.
         static int tick = 0;
         if (++tick >= 300) { tick = 0;
-            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, hook slots lost %d, inline %d | %s",
-                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_n_vt, g_rehooked, (int)g_inline, g_summary); g_other_draws = 0; }
+            log_line("# 3r state: known %d, waiting %d, others %d, seen-before near %d, foreign %d, dropped %d, mounted %d, map %u, other-context draws %d, vtables %d, hook slots lost %d, inline %d, held %d, empty %d, no-link %d, near by world %d / by camera %d | %s",
+                     g_n_lock, g_n_pend, g_ring, g_foreign_near, g_foreign.n, g_demoted, (int)g_mounted, g_map_id, g_other_draws, g_n_vt, g_rehooked, (int)g_inline, g_held_frames, g_empty_frames, g_skipped_frames, g_world_rel, g_cam_rel, g_summary);
+            g_world_rel = 0; g_cam_rel = 0;
+            g_other_draws = 0; g_held_frames = 0; g_empty_frames = 0; g_skipped_frames = 0; }
     }
     g_p2_rej = 0; g_rej_range = 0; g_rej_order = 0; g_lost_tf = 0;
     g_last_ring = g_ring; g_n_pend = 0; g_ring = 0; g_foreign_near = 0;
@@ -1666,6 +1739,8 @@ void set_mounted(bool m) { g_mounted = m; }
 void set_long_body(bool b) { g_long_body = b; }
 void set_log_limit(int lines) { g_log_limit = lines; }
 void forget_gear() {
+    if (g_n_lock > 0) log_line("# gear lock: forgetting %d known pieces", g_n_lock);
+    g_diag_lines = 0;
     g_n_lock = 0; g_alone_streak = 0; g_quiet = 0; g_n_mine = 0; g_foreign.clear(); g_far_streak.clear(); g_n_seen = 0; g_n_stay = 0;
 }
 // A new map reloads every model, and another character wears other gear:

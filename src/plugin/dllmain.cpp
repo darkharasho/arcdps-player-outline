@@ -92,12 +92,18 @@ static uintptr_t imgui_cb(uint32_t not_charsel_or_loading, uint32_t hide) {
     // The character outline runs with the marker switched off too, so the
     // marker's "enabled" gate comes after the outline block below.
     if (!not_charsel_or_loading || hide) {
+        spike::present_only(false);
         reset_smoothing();
         return 0;
     }
 
     core::AvatarState avatar; core::CameraState cam; plugin::SessionInfo session;
-    if (!g_reader.sample(avatar, cam, session)) { reset_smoothing(); return 0; }
+    if (!g_reader.sample(avatar, cam, session)) {
+        // MumbleLink mid-update: still draw the outline, or it blinks out.
+        spike::present_only(true);
+        reset_smoothing();
+        return 0;
+    }
     g_race = session.race;   // cache for the options panel to highlight
 
     // Character outline. Runs on the render thread, same as the draw hooks, so

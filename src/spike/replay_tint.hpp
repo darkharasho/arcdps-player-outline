@@ -25,6 +25,10 @@ void shutdown();
 // Once per frame from the imgui callback (render thread, at Present).
 void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
                float backbuffer_w, float backbuffer_h);
+// A frame with no set_frame. draw: the camera could not be read but the
+// outline should still be drawn from the mask; otherwise (hidden, loading)
+// the mask is thrown away.
+void present_only(bool draw);
 
 // Controls for the probe window (no keyboard polling).
 bool*  outline_flag();
