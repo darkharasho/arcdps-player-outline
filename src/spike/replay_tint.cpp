@@ -175,7 +175,7 @@ ID3D11ShaderResourceView* g_hold_srv = nullptr;
 int g_mask_n = 0;           // mask draws since the last composite
 int g_hold_n = 0;           // mask draws the held copy had
 int g_hold_age = 0;         // frames the held copy has stood in
-constexpr int kHoldFrames = 4;
+constexpr int kHoldFrames = 2;
 int g_held_frames = 0, g_empty_frames = 0, g_skipped_frames = 0;   // for the 3r log line
 
 // Learned set: draws that sat (almost) wholly inside the cylinder when last
@@ -455,8 +455,14 @@ inline const VtHook& vt_of(ID3D11DeviceContext* ctx) {
     return g_vts[0];
 }
 constexpr int kCbFloats = 160;
-struct CbShadow { ID3D11Resource* res; int n; float f[kCbFloats]; };
-constexpr int kCbTable = 1024;                 // power of two
+struct CbShadow { ID3D11Resource* res; int n; int seen; float f[kCbFloats]; };
+// Entries are never told when a buffer is released, so a slot whose buffer
+// has not been written for kCbStale frames is reused. Without that the table
+// filled after a map change or two and new buffers (our gear's bone palettes
+// among them) were never copied: their pieces had no readable transform, the
+// gear was lost, and pieces learned without a transform lit up on others.
+constexpr int kCbTable = 4096;                 // power of two
+constexpr int kCbStale = 120;
 CbShadow g_cbs[kCbTable];
 struct OpenMap { ID3D11Resource* res; const void* data; UINT bytes; };
 OpenMap g_open[16];
@@ -614,13 +620,20 @@ UINT cb_bytes(ID3D11Resource* res) {
 
 CbShadow* cb_slot(ID3D11Resource* res, bool create) {
     size_t i = ((uintptr_t)res >> 4) * 0x9E3779B1u & (kCbTable - 1);
+    CbShadow* oldest = nullptr;
     for (int probe = 0; probe < 32; ++probe, i = (i + 1) & (kCbTable - 1)) {
-        if (g_cbs[i].res == res) return &g_cbs[i];
-        if (!g_cbs[i].res) {
+        CbShadow& e = g_cbs[i];
+        if (e.res == res) return &e;
+        if (!e.res) {
             if (!create) return nullptr;
-            g_cbs[i].res = res;
-            return &g_cbs[i];
+            e.res = res; e.n = 0; e.seen = g_hook_frames;
+            return &e;
         }
+        if (create && (!oldest || e.seen < oldest->seen)) oldest = &e;
+    }
+    if (create && oldest && g_hook_frames - oldest->seen > kCbStale) {
+        oldest->res = res; oldest->n = 0; oldest->seen = g_hook_frames;
+        return oldest;
     }
     return nullptr;
 }
@@ -632,6 +645,7 @@ void cb_store(ID3D11Resource* res, const void* data, UINT bytes) {
     const UINT n = bytes / 4 < (UINT)kCbFloats ? bytes / 4 : (UINT)kCbFloats;
     std::memcpy(c->f, data, n * 4);
     c->n = (int)n;
+    c->seen = g_hook_frames;
 }
 
 HRESULT STDMETHODCALLTYPE hk_Map(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub,
@@ -715,6 +729,700 @@ uint64_t mix(uint64_t h, uint64_t v) {
     return h;
 }
 
+// Capes (and some hair) are cloth. The game simulates them on the
+// CPU and uploads world-space vertices to a dynamic vertex buffer each frame,
+// so cb0 holds no world transform (they measure as far as the camera, like
+// terrain) and no bones (GrTrans never sees them). Their own vertices say
+// whose they are: a candidate draw copies its indices and vertices to staging,
+// and a few frames later the CPU stores how far the vertices' centre is from
+// the avatar under the mesh's key. The cape is one 1452-index draw just
+// before the body's, in both scene passes.
+// Zoomed out in a crowd 8 slots were always full and our cape missed its
+// turn; each mesh now waits kClothEvery frames between measurements.
+constexpr int kClothSlots = 16, kClothSets = 4, kClothSeen = 256, kClothEvery = 8;
+constexpr UINT kClothVbBytes = 65536, kClothIbBytes = 16384, kClothMinIdx = 192;
+constexpr float kClothRadius = 1.0f;   // metres, horizontal, vertices' centre to avatar
+// Once a mesh is ours it stays ours out to this: mid-jump the cape trails
+// behind and its centre measured up to 1.17 m away.
+constexpr float kClothKeep = 1.6f;
+struct ClothCopy { ID3D11Buffer* vb; ID3D11Buffer* ib; uint64_t ck; UINT stride, count, vb_bytes, ib_bytes; bool i32; core::Vec3 av, cam; };
+struct ClothSet { ClothCopy c[kClothSlots]; int n; };
+struct ClothSeen { uint64_t ck; float d; int frame; int asked; int logged; bool ours; };
+ClothSet  g_cloth[kClothSets];
+int       g_cloth_cur = 0;
+ClothSeen g_cloth_seen[kClothSeen];
+long long g_cloth_ok = 0, g_cloth_far = 0, g_cloth_copies = 0;
+
+ClothSeen* cloth_seen(uint64_t ck, bool create) {
+    ClothSeen* oldest = nullptr;
+    for (auto& e : g_cloth_seen) {
+        if (e.ck == ck) return &e;
+        if (!oldest || e.frame < oldest->frame) oldest = &e;
+    }
+    if (!create) return nullptr;
+    *oldest = {ck, -1.0f, g_hook_frames, -1000, 0, false};
+    return oldest;
+}
+
+// 1 if the mesh was last judged ours, 0 if not, -1 if unknown; queues a new
+// measurement if this frame has none yet. Only dynamic vertex buffers count.
+int cloth_check(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base) {
+    if (count < kClothMinIdx || base < 0) return -1;
+    ID3D11Buffer* vb = nullptr; UINT stride = 0, off = 0;
+    ctx->IAGetVertexBuffers(0, 1, &vb, &stride, &off);
+    if (!vb) return -1;
+    D3D11_BUFFER_DESC vd{}; vb->GetDesc(&vd);
+    ID3D11Buffer* ib = nullptr; DXGI_FORMAT ib_fmt = DXGI_FORMAT_UNKNOWN; UINT ib_off = 0;
+    ctx->IAGetIndexBuffer(&ib, &ib_fmt, &ib_off);
+    int out = -1;
+    if (ib && vd.Usage == D3D11_USAGE_DYNAMIC && stride >= 12 && stride <= 256) {
+        uint64_t ck = mix(2, (uint64_t)(uintptr_t)ib);
+        ck = mix(ck, ((uint64_t)count << 32) | start);
+        ck = mix(ck, ib_off);
+        ClothSeen* e = cloth_seen(ck, false);
+        if (e && g_hook_frames - e->frame < 30 && (e->ours || e->d >= 0.0f)) out = e->ours ? 1 : 0;
+        ClothSet& set = g_cloth[g_cloth_cur];
+        if (set.n < kClothSlots && (!e || g_hook_frames - e->asked >= kClothEvery)) {
+            ClothCopy& c = set.c[set.n];
+            D3D11_BUFFER_DESC sd{};
+            sd.Usage = D3D11_USAGE_STAGING; sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            if (!c.vb) { sd.ByteWidth = kClothVbBytes; if (FAILED(g_dev->CreateBuffer(&sd, nullptr, &c.vb))) c.vb = nullptr; }
+            if (!c.ib) { sd.ByteWidth = kClothIbBytes; if (FAILED(g_dev->CreateBuffer(&sd, nullptr, &c.ib))) c.ib = nullptr; }
+            D3D11_BUFFER_DESC id{}; ib->GetDesc(&id);
+            const UINT isz = ib_fmt == DXGI_FORMAT_R32_UINT ? 4 : 2;
+            const UINT v0 = off + (UINT)base * stride, i0 = ib_off + start * isz;
+            if (c.vb && c.ib && v0 < vd.ByteWidth && i0 < id.ByteWidth) {
+                UINT vbytes = vd.ByteWidth - v0; if (vbytes > kClothVbBytes) vbytes = kClothVbBytes;
+                vbytes -= vbytes % stride;
+                UINT ibytes = id.ByteWidth - i0; if (ibytes > count * isz) ibytes = count * isz;
+                if (ibytes > kClothIbBytes) ibytes = kClothIbBytes;
+                ibytes -= ibytes % isz;
+                if (vbytes && ibytes) {
+                    D3D11_BOX vbox{v0, 0, 0, v0 + vbytes, 1, 1}, ibox{i0, 0, 0, i0 + ibytes, 1, 1};
+                    ctx->CopySubresourceRegion(c.vb, 0, 0, 0, 0, vb, 0, &vbox);
+                    ctx->CopySubresourceRegion(c.ib, 0, 0, 0, 0, ib, 0, &ibox);
+                    c.ck = ck; c.stride = stride; c.count = count; c.vb_bytes = vbytes; c.ib_bytes = ibytes;
+                    c.i32 = isz == 4; c.av = g_avatar; c.cam = g_cam_pos;
+                    ++set.n; ++g_cloth_copies;
+                    if (!e) e = cloth_seen(ck, true);
+                    e->asked = g_hook_frames;
+                }
+            }
+        }
+    }
+    if (ib) ib->Release();
+    vb->Release();
+    return out;
+}
+
+// Reads the oldest set of copies (kClothSets - 1 frames old) and starts a new set.
+void cloth_frame(ID3D11DeviceContext* ctx) {
+    g_cloth_cur = (g_cloth_cur + 1) % kClothSets;
+    ClothSet& set = g_cloth[g_cloth_cur];
+    const float k = 39.3701f;
+    for (int s = 0; s < set.n; ++s) {
+        ClothCopy& c = set.c[s];
+        // Where we were when the copy was made.
+        const core::Vec3 rel = c.av - c.cam;
+        const float tgt[2][3] = {{c.av.x * k, c.av.z * k, -c.av.y * k},
+                                 {rel.x * k, rel.z * k, -rel.y * k}};
+        D3D11_MAPPED_SUBRESOURCE mv{}, mi{};
+        if (FAILED(ctx->Map(c.vb, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mv))) continue;
+        if (FAILED(ctx->Map(c.ib, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mi))) { ctx->Unmap(c.vb, 0); continue; }
+        const uint8_t* vp = (const uint8_t*)mv.pData;
+        const UINT n_idx = c.ib_bytes / (c.i32 ? 4 : 2);
+        double sum[3] = {0, 0, 0}; int n = 0;
+        for (UINT i = 0; i < n_idx; ++i) {
+            const UINT v = c.i32 ? ((const uint32_t*)mi.pData)[i] : ((const uint16_t*)mi.pData)[i];
+            if ((uint64_t)v * c.stride + 12 > c.vb_bytes) continue;
+            float p[3]; std::memcpy(p, vp + (size_t)v * c.stride, 12);
+            if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2])) continue;
+            sum[0] += p[0]; sum[1] += p[1]; sum[2] += p[2]; ++n;
+        }
+        ctx->Unmap(c.ib, 0);
+        ctx->Unmap(c.vb, 0);
+        float best = -1.0f;
+        if (n > 0) {
+            const float cx = (float)(sum[0] / n), cy = (float)(sum[1] / n), cz = (float)(sum[2] / n);
+            for (int t = 0; t < 2; ++t) {
+                const float dv = cz - tgt[t][2];
+                if (!(dv > -160.0f && dv < 80.0f)) continue;
+                const float dx = cx - tgt[t][0], dy = cy - tgt[t][1];
+                const float d = std::sqrt(dx * dx + dy * dy) / k;
+                if (best < 0.0f || d < best) best = d;
+            }
+            ClothSeen* e = cloth_seen(c.ck, true);
+            e->d = best; e->frame = g_hook_frames;
+            if (best >= 0.0f) e->ours = best <= (e->ours ? kClothKeep : kClothRadius);
+        }
+    }
+    set.n = 0;
+}
+
+// Probe 4c/4d. The game's GrTrans function (RVA 0xa9de90 in build 2026-11-24)
+// copies one GrModel's bone matrices into the bone stream that becomes the
+// skinned VS cb0 palette. It is called once per draw item from the per-draw
+// uniform setup in BgfxDraw.cpp. Hooked read-only, it records the model id
+// under a hash of the bones; DrawIndexed looks for that hash in the cb0
+// shadow. Both functions are found by their assert strings, never by a fixed
+// address. See docs/re/2026-11-24-character-draw-recon.md.
+// A character body is one model with a stable id, and gear models sit next
+// to it. The lock finds our body model by its root position; draws whose
+// model is ours are drawn, and draws whose model sits elsewhere are not.
+struct GrtEntry {
+    uint64_t h;
+    uint32_t model, group, seq, tid, other;   // other: a different model seen with the same hash
+    uint32_t amb;                             // 1: two models produced this hash lately
+    float pos[3], root[3];                    // translations of bone 0 and of the root output
+};
+// Per model: where its root is and how many groups it set up per frame.
+// calls counts set-ups (an item is set up once per pass); gmask the distinct groups.
+struct GrtModel { uint32_t model, seq; int calls, prev_calls; uint64_t gmask, prev_gmask; float root[3]; };
+// The tables are 4-way buckets. The hook stores ~5700 set-ups a frame and most
+// draws look theirs up a frame later; a direct-mapped 8192-slot table had lost
+// a quarter of them by then (rigid weapon draws, which only the model can
+// claim, dropped out of the outline in 2 of 9 sampled frames).
+constexpr int kGrtTable = 65536, kGrtWays = 4, kGrtDraws = 1024, kGrtEvery = 300;
+constexpr int kGrtModels = 4096, kGrtSet = 16;
+constexpr int kGrtH2 = 28;   // floats in the strong hash: bone 0 (16) + bone 1's three rows
+GrtEntry g_grt[kGrtTable];    // keyed by bone 0
+GrtEntry g_grt2[kGrtTable];   // keyed by bones 0 and 1
+GrtModel g_grm[kGrtModels];
+SRWLOCK  g_grt_lock = SRWLOCK_INIT;
+using GrtFn = void(__fastcall*)(uint32_t model, uint32_t group, void* stream, float* out);
+GrtFn g_grt_orig = nullptr;
+void* g_grt_target = nullptr;
+volatile LONG g_grt_calls = 0, g_grt_inflight = 0, g_grt_collide = 0, g_grt_collide2 = 0, g_present_seq = 0;
+volatile LONG g_grt_tid0 = 0, g_grt_tid1 = 0;   // first two threads seen in the hook
+volatile LONG g_grm_full = 0;
+
+struct GrtDraw {
+    uint32_t model, group; float d; int lag, off, via, cbn;   // via: 2 strong hash, 1 bone 0, 0 none
+    bool mine, matched, amb, lock, skin, zw0; uint64_t mk; UINT count, cbw; float bd;
+};
+// 4g: the draw being noted writes no depth (hair cards, soft cape edges).
+bool g_cur_zw0 = false;
+long long g_zw0_near = 0, g_zw0_ours = 0;
+GrtDraw g_gd[kGrtDraws];
+int g_n_gd = 0, g_grt_tick = 0, g_grt_no = 0;
+// Totals over kGrtEvery frames.
+long long g_gs_skin = 0, g_gs_match = 0, g_gs_mine = 0, g_gs_mine_match = 0, g_gs_others_ours = 0;
+long long g_gs_lag[3] = {}, g_gs_calls = 0, g_gs_via2 = 0, g_gs_amb = 0;
+long long g_gs_mine_nocb = 0;                       // ours, unmatched, cb shadow under 12 floats
+long long g_gs_both = 0, g_gs_heur_only = 0, g_gs_heur_only_nomatch = 0, g_gs_heur_only_amb = 0;
+long long g_gs_lock_only = 0, g_gs_lock_only_far = 0, g_gs_locked_frames = 0;
+
+// Model lock (render thread only).
+uint32_t g_lk_model = 0xffffffffu;   // locked body model
+uint32_t g_lk_cand = 0xffffffffu;    // candidate being confirmed
+int g_lk_stable = 0, g_lk_lost = 0, g_lk_relocks = 0, g_lk_drops = 0;
+float g_lk_root[3] = {}, g_lk_dist = -1.0f;
+uint32_t g_lk_set[kGrtSet]; int g_lk_n = 0;   // body + gear, used by the next frame's draws
+float g_lk_near = -1.0f;   // last frame: candidate's root distance
+int g_lk_votes = 0, g_lk_votes2 = 0, g_lk_disagree = 0, g_lk_bodies = 0;
+// Models next to the body, and whether they have earned a place in the set.
+// follows/stat: once our body has moved kFollowMove from where it was when the
+// model was first seen next to it, the model either moved with it (gear) or
+// stayed put (an NPC or prop we walked up to). Only followers join by standing
+// close; a stationary model never joins and its draws are not spared the veto.
+struct GearTrack { uint32_t model; int close, away, voted; bool in, big, att, follows, stat;
+                   float body0[3], root0[3]; };
+int g_gt_static = 0;
+constexpr int kGearTracks = 32;
+GearTrack g_gt[kGearTracks]; int g_n_gt = 0;
+int g_gt_admits = 0, g_gt_by_vote = 0, g_gt_expired = 0, g_gt_by_root = 0;
+bool g_lk_others = false;
+
+uint64_t hashn(const float* f, int n) {
+    uint64_t h = 0;
+    for (int k = 0; k < n; ++k) { uint32_t u; std::memcpy(&u, &f[k], 4); h = mix(h, u); }
+    return h | 1;   // 0 marks an empty slot
+}
+uint64_t hash12(const float* f) { return hashn(f, 12); }
+
+GrtEntry* grt_bucket(GrtEntry* tab, uint64_t h) {
+    return &tab[(h >> 7) & (kGrtTable - 1) & ~(uint64_t)(kGrtWays - 1)];
+}
+// Under a lock. The entry with hash h, or nullptr.
+const GrtEntry* grt_get(GrtEntry* tab, uint64_t h) {
+    GrtEntry* b = grt_bucket(tab, h);
+    for (int w = 0; w < kGrtWays; ++w) if (b[w].h == h) return &b[w];
+    return nullptr;
+}
+// Under the exclusive lock. Marks a hash two models produced within two frames
+// as ambiguous, and keeps it so while it keeps coming back.
+void grt_put(GrtEntry* tab, GrtEntry e, volatile LONG* collide) {
+    GrtEntry* b = grt_bucket(tab, e.h);
+    GrtEntry* slot = nullptr;
+    for (int w = 0; w < kGrtWays && !slot; ++w) if (b[w].h == e.h) slot = &b[w];
+    if (slot) {
+        if (slot->seq + 2 >= e.seq) {
+            if (slot->model != e.model) { e.other = slot->model; e.amb = 1; InterlockedIncrement(collide); }
+            else if (slot->amb) { e.other = slot->other; e.amb = 1; }
+        }
+    } else {   // an empty way, else the one set up longest ago
+        slot = &b[0];
+        for (int w = 0; w < kGrtWays; ++w) {
+            if (!b[w].h) { slot = &b[w]; break; }
+            if ((int32_t)(b[w].seq - slot->seq) < 0) slot = &b[w];
+        }
+    }
+    *slot = e;
+}
+
+GrtModel* grm_find(uint32_t model, bool make, uint32_t seq) {
+    const uint32_t start = (model * 2654435761u) & (kGrtModels - 1);
+    GrtModel* stale = nullptr;
+    for (int i = 0; i < 16; ++i) {
+        GrtModel& m = g_grm[(start + i) & (kGrtModels - 1)];
+        if (m.seq && m.model == model) return &m;
+        if (!stale && (!m.seq || m.seq + 120 < seq)) stale = &m;
+    }
+    if (!make) return nullptr;
+    if (!stale) { InterlockedIncrement(&g_grm_full); return nullptr; }
+    *stale = GrtModel{};
+    stale->model = model;
+    return stale;
+}
+
+void __fastcall hk_grt(uint32_t model, uint32_t group, void* stream, float* out) {
+    InterlockedIncrement(&g_grt_inflight);
+    g_grt_orig(model, group, stream, out);
+    const float* bones = stream ? *reinterpret_cast<float* const*>(static_cast<char*>(stream) + 8) : nullptr;
+    if (bones) {
+        GrtEntry e{};
+        e.h = hash12(bones);
+        e.model = model; e.group = group; e.other = 0xffffffffu;
+        e.seq = (uint32_t)g_present_seq;
+        e.tid = GetCurrentThreadId();
+        e.pos[0] = bones[3]; e.pos[1] = bones[7]; e.pos[2] = bones[11];
+        if (out) { e.root[0] = out[3]; e.root[1] = out[7]; e.root[2] = out[11]; }
+        GrtEntry e2 = e;
+        e2.h = hashn(bones, kGrtH2);
+        AcquireSRWLockExclusive(&g_grt_lock);
+        grt_put(g_grt, e, &g_grt_collide);
+        grt_put(g_grt2, e2, &g_grt_collide2);
+        if (out) {
+            if (GrtModel* m = grm_find(model, true, e.seq)) {
+                if (m->seq != e.seq) {
+                    const bool last = m->seq + 1 == e.seq;
+                    m->prev_calls = last ? m->calls : 0;
+                    m->prev_gmask = last ? m->gmask : 0;
+                    m->calls = 0; m->gmask = 0;
+                }
+                ++m->calls; m->seq = e.seq;
+                m->gmask |= 1ull << (group < 63 ? group : 63);
+                m->root[0] = e.root[0]; m->root[1] = e.root[1]; m->root[2] = e.root[2];
+            }
+        }
+        ReleaseSRWLockExclusive(&g_grt_lock);
+        if (InterlockedCompareExchange(&g_grt_tid0, (LONG)e.tid, 0) != 0 && g_grt_tid0 != (LONG)e.tid)
+            InterlockedCompareExchange(&g_grt_tid1, (LONG)e.tid, 0);
+    }
+    InterlockedIncrement(&g_grt_calls);
+    InterlockedDecrement(&g_grt_inflight);
+}
+
+bool g_use_model = true;   // probe 4e: the model lock decides what it can
+long long g_gs_by_model = 0, g_gs_vetoed = 0, g_gs_rigid = 0, g_gs_rigid_match = 0, g_gs_rigid_ours = 0;
+bool in_lock_set(uint32_t model) {
+    for (int k = 0; k < g_lk_n; ++k) if (g_lk_set[k] == model) return true;
+    return false;
+}
+
+// Records which model the current skinned draw belongs to, if a window of its
+// cb0 shadow has a hash the hook stored: the strong hash first, then bone 0
+// alone unless two models produced it.
+// Returns the model lock's verdict on the draw: 1 its model is ours, -1 its
+// model is set up somewhere that is not next to our body, 0 no verdict (no
+// lock, no match, or a model next to the body that has not earned a place yet).
+float root_dist(const float* r);
+int grt_note_draw(ID3D11DeviceContext* ctx, bool mine, float d, uint64_t mk, UINT count, bool skin) {
+    if (!g_grt_target) return 0;
+    ID3D11Buffer* cb = nullptr;
+    ctx->VSGetConstantBuffers(0, 1, &cb);
+    if (!cb) return 0;
+    D3D11_BUFFER_DESC bd{};
+    cb->GetDesc(&bd);
+    const CbShadow* c = cb_slot(cb, false);
+    cb->Release();
+    GrtDraw g{};
+    g.skin = skin; g.cbw = bd.ByteWidth;
+    g.mine = mine; g.d = d; g.mk = mk; g.count = count; g.off = -1;
+    g.cbn = c ? c->n : 0;
+    g.zw0 = g_cur_zw0;
+    const LONG now = g_present_seq;
+    for (int o = 0; c && o + 12 <= c->n && !g.matched; o += 4) {
+        const uint64_t h1 = hash12(&c->f[o]);
+        const uint64_t h2 = o + kGrtH2 <= c->n ? hashn(&c->f[o], kGrtH2) : 0;
+        GrtEntry e1{}, e2{};
+        AcquireSRWLockShared(&g_grt_lock);
+        if (h2) if (const GrtEntry* p = grt_get(g_grt2, h2)) e2 = *p;
+        if (const GrtEntry* p = grt_get(g_grt, h1)) e1 = *p;
+        ReleaseSRWLockShared(&g_grt_lock);
+        const GrtEntry* e = nullptr;
+        if (h2 && e2.h == h2 && !e2.amb) { e = &e2; g.via = 2; }
+        else if (e1.h == h1) {
+            if (e1.amb) { g.amb = true; continue; }
+            e = &e1; g.via = 1;
+        }
+        if (!e) continue;
+        g.matched = true; g.amb = false; g.model = e->model; g.group = e->group; g.off = o;
+        g.lag = (int)(now - (LONG)e->seq);
+    }
+    g.lock = g.matched && in_lock_set(g.model);
+    // Where the matched palette's first bone is. `d` is the nearest bone
+    // anywhere in the buffer, and the game packs several characters into one
+    // buffer: another player's shoulders measured 0.2 m from us because our
+    // own bones sat further along in the same buffer.
+    float pal_d = -1.0f;
+    if (g.matched && c && g.off >= 0 && g.off + 12 <= c->n) {
+        const float r[3] = {c->f[g.off + 3], c->f[g.off + 7], c->f[g.off + 11]};
+        pal_d = root_dist(r);
+    }
+    g.bd = pal_d;
+    if (g_n_gd < kGrtDraws) g_gd[g_n_gd++] = g;
+    if (!g_use_model || g_lk_n == 0 || !g.matched) return 0;
+    if (g.lock) return 1;
+    // Candidates are spared only once they have come along with us (or hang
+    // on our skeleton); an NPC we stand next to is not.
+    for (int t = 0; t < g_n_gt; ++t)
+        if (g_gt[t].model == g.model && (g_gt[t].in || g_gt[t].follows || g_gt[t].att)) return 0;
+    // 4e: zoomed in, our hair, face and some armour are drawn with bones
+    // identical to our body's, but matched to other models whose root is
+    // nowhere near us. A draw whose own bones sit at us is not vetoed.
+    (void)d;
+    if (pal_d >= 0.0f && pal_d <= 1.0f) return 0;
+    return -1;
+}
+
+// Horizontal metres from the avatar to a root translation (inches), in world
+// or camera-relative space, whichever is nearer; negative if the height is off.
+float root_dist(const float* r) {
+    const float k = 39.3701f;
+    const core::Vec3 rel = g_avatar - g_cam_pos;
+    const float tgt[2][3] = {{g_avatar.x * k, g_avatar.z * k, -g_avatar.y * k},
+                             {rel.x * k, rel.z * k, -rel.y * k}};
+    float best = -1.0f;
+    for (int s = 0; s < 2; ++s) {
+        const float dv = r[2] - tgt[s][2];
+        if (!(dv > -160.0f && dv < 80.0f)) continue;
+        const float dx = r[0] - tgt[s][0], dy = r[1] - tgt[s][1];
+        const float d = std::sqrt(dx * dx + dy * dy) / k;
+        if (best < 0.0f || d < best) best = d;
+    }
+    return best;
+}
+
+int grm_groups(const GrtModel& m) {
+    return __builtin_popcountll(m.gmask) > __builtin_popcountll(m.prev_gmask)
+               ? __builtin_popcountll(m.gmask) : __builtin_popcountll(m.prev_gmask);
+}
+
+// Once a frame, before g_gd is cleared: find our body model and what goes with it.
+// 4d showed the lone-body rule cannot work: with nobody around, our own mount
+// and weapon models also sit at the avatar and set up as many items as a body.
+// So the cylinder heuristic votes: each skinned draw it takes as ours whose own
+// transform is within kVoteDist counts for that draw's model. The body is the
+// model with the most votes (at least kMinVotes, twice the runner-up) and its
+// root within kAcquire of the avatar, kStable frames running. It is kept while
+// its root stays within kKeep and it keeps being set up, dropped after kLost
+// frames without. The set: the body plus models whose root is within kSetH
+// horizontally and kSetV vertically of the body's root and that earned it:
+// either the heuristic voted for them in kAdmitVotes frames, or they stayed
+// there kAdmitFast frames running while no other body was next to ours.
+// Body-sized models (one of our own items has 11 groups, more than the body)
+// only join by votes, so a player stacked on us stays out. A member is
+// dropped after kAway frames more than kKeepH from the body.
+// A candidate's track is dropped the first frame it is beyond kCandH (1.5 m)
+// of the body, so one still tracked after the body has moved kFollowMove from
+// where it first saw it has come along: something standing still cannot be
+// within 1.5 m of both ends of a 3.2 m walk. Comparing root offsets did not
+// work: in some animations our cape's root stays put while the body's moves
+// ~1 m, and the cape was taken for something standing still.
+void gt_follow_check(GearTrack& gt) {
+    constexpr float kFollowMove = 3.2f * 39.3701f;
+    const float bx = g_lk_root[0] - gt.body0[0], by = g_lk_root[1] - gt.body0[1];
+    if (!gt.follows && bx * bx + by * by >= kFollowMove * kFollowMove) { gt.follows = true; ++g_gt_static; }
+}
+
+void grt_update_lock() {
+    constexpr int kBodyGroups = 9, kStable = 30, kLost = 60, kMinVotes = 3;
+    constexpr int kAdmitFast = 20, kAdmitVotes = 10, kAway = 30;
+    constexpr float kVoteDist = 1.0f, kAcquire = 1.0f, kKeep = 5.0f;
+    constexpr float kSetH = 1.0f * 39.3701f, kSetV = 2.0f * 39.3701f;
+    // A member keeps its place out to kKeepH: in some animations the body's
+    // root moves ~1 m from the avatar while the cape's stays put, and at the
+    // 1 m admission edge the cape kept dropping out (4e, seventh build).
+    constexpr float kKeepH = 2.5f * 39.3701f;
+    const uint32_t now = (uint32_t)g_present_seq;
+
+    uint32_t vm[16]; int vn[16]; int n_v = 0;
+    for (int i = 0; i < g_n_gd; ++i) {
+        const GrtDraw& g = g_gd[i];
+        if (!g.mine || !g.matched || g.d < 0.0f || g.d > kVoteDist) continue;
+        int k = 0;
+        while (k < n_v && vm[k] != g.model) ++k;
+        if (k == n_v) { if (n_v == 16) continue; vm[n_v] = g.model; vn[n_v++] = 0; }
+        ++vn[k];
+    }
+    int best = -1, second = 0;
+    for (int k = 0; k < n_v; ++k) {
+        if (best < 0 || vn[k] > vn[best]) { if (best >= 0) second = vn[best]; best = k; }
+        else if (vn[k] > second) second = vn[k];
+    }
+    const uint32_t cand = best >= 0 && vn[best] >= kMinVotes && vn[best] >= 2 * second ? vm[best] : 0xffffffffu;
+    g_lk_votes = best >= 0 ? vn[best] : 0; g_lk_votes2 = second;
+
+    bool body_seen = false, cand_near = false; float body_root[3] = {};
+    float cand_d = -1.0f;
+    AcquireSRWLockShared(&g_grt_lock);
+    if (g_lk_model != 0xffffffffu)
+        if (const GrtModel* m = grm_find(g_lk_model, false, now))
+            if (m->seq + 2 >= now) { body_seen = true; std::memcpy(body_root, m->root, sizeof(body_root)); }
+    if (cand != 0xffffffffu)
+        if (const GrtModel* m = grm_find(cand, false, now))
+            if (m->seq + 2 >= now) { cand_d = root_dist(m->root); cand_near = cand_d >= 0.0f && cand_d <= kAcquire; }
+    ReleaseSRWLockShared(&g_grt_lock);
+    g_lk_near = cand_d;
+
+    if (g_lk_model != 0xffffffffu) {
+        const float d = body_seen ? root_dist(body_root) : -1.0f;
+        if (body_seen && d >= 0.0f && d <= kKeep) {
+            g_lk_lost = 0; g_lk_dist = d;
+            std::memcpy(g_lk_root, body_root, sizeof(g_lk_root));
+        } else if (++g_lk_lost > kLost) {
+            log_line("# 4d lock dropped: model %u (%s, last %.2f m)", g_lk_model,
+                     body_seen ? "too far" : "no longer set up", g_lk_dist);
+            g_lk_model = 0xffffffffu; g_lk_cand = 0xffffffffu; g_lk_stable = 0; ++g_lk_drops;
+            g_n_gt = 0;
+        }
+        if (cand_near && cand != g_lk_model) ++g_lk_disagree;
+    }
+    if (g_lk_model == 0xffffffffu) {
+        if (cand_near) {
+            if (cand == g_lk_cand) ++g_lk_stable; else { g_lk_cand = cand; g_lk_stable = 1; }
+            if (g_lk_stable >= kStable) {
+                g_lk_model = g_lk_cand; g_lk_lost = 0; g_lk_dist = cand_d; ++g_lk_relocks;
+                log_line("# 4d locked: model %u at %.2f m (%d votes, runner-up %d)", g_lk_model, cand_d,
+                         g_lk_votes, g_lk_votes2);
+            }
+        } else {
+            g_lk_stable = 0;
+        }
+    }
+
+    g_lk_n = 0; g_lk_bodies = 0;
+    if (g_lk_model == 0xffffffffu || g_lk_lost) return;
+    g_lk_set[g_lk_n++] = g_lk_model;
+    for (int t = 0; t < g_n_gt; ++t) ++g_gt[t].away;   // cleared below for those still near
+    AcquireSRWLockShared(&g_grt_lock);
+    for (const GrtModel& m : g_grm) {
+        if (!m.seq || m.seq + 2 < now || m.model == g_lk_model) continue;
+        const float dx = m.root[0] - g_lk_root[0], dy = m.root[1] - g_lk_root[1], dz = m.root[2] - g_lk_root[2];
+        if (std::fabs(dz) > kSetV) continue;
+        if (dx * dx + dy * dy > kSetH * kSetH) {
+            // Members keep their place out to kKeepH, candidates out to
+            // kCandH (a lagging cape root), where they can still show they
+            // come along.
+            constexpr float kCandH = 1.5f * 39.3701f;
+            const float h2 = dx * dx + dy * dy;
+            for (int t = 0; t < g_n_gt; ++t)
+                if (g_gt[t].model == m.model) {
+                    if (g_gt[t].in ? h2 <= kKeepH * kKeepH : h2 <= kCandH * kCandH) {
+                        g_gt[t].away = 0;
+                        gt_follow_check(g_gt[t]);
+                    }
+                    break;
+                }
+            continue;
+        }
+        const bool big = grm_groups(m) >= kBodyGroups;
+        // Same root as the body to the inch: hung on our own skeleton (4e:
+        // every weapon, and a back item). Someone else's never lines up.
+        const bool att = std::fabs(dx) < 1.0f && std::fabs(dy) < 1.0f && std::fabs(dz) < 1.0f;
+        if (big) ++g_lk_bodies;
+        int t = 0;
+        while (t < g_n_gt && g_gt[t].model != m.model) ++t;
+        if (t == g_n_gt) {
+            if (g_n_gt == kGearTracks) continue;
+            GearTrack nt{m.model, 0, 0, 0, false, false, false, false, false, {}, {}};
+            std::memcpy(nt.body0, g_lk_root, sizeof(nt.body0));
+            std::memcpy(nt.root0, m.root, sizeof(nt.root0));
+            g_gt[g_n_gt++] = nt;
+        }
+        gt_follow_check(g_gt[t]);
+        g_gt[t].away = 0;
+        g_gt[t].big = g_gt[t].big || big;
+        g_gt[t].att = att;
+        ++g_gt[t].close;
+    }
+    ReleaseSRWLockShared(&g_grt_lock);
+    // Someone else's body next to ours: while it is there, nothing joins by
+    // standing close, only by votes (a player stacked on us for seconds would
+    // otherwise bring their weapons in).
+    bool others = false;
+    for (int t = 0; t < g_n_gt; ++t)
+        if (g_gt[t].big && !g_gt[t].in && !g_gt[t].att && !g_gt[t].away) { others = true; break; }
+    g_lk_others = others;
+    int w = 0;
+    for (int t = 0; t < g_n_gt; ++t) {
+        GearTrack& gt = g_gt[t];
+        if (gt.away > kAway || (!gt.in && gt.away)) {   // a candidate must stay put
+            if (gt.in) ++g_gt_expired;
+            continue;
+        }
+        if (!gt.away)
+            for (int k = 0; k < n_v; ++k)
+                if (vm[k] == gt.model) { ++gt.voted; break; }
+        // Body-sized models (our 11-group back item) only join by votes.
+        const bool by_vote = gt.voted >= kAdmitVotes && gt.follows;
+        if (!gt.in && (by_vote || (gt.att && gt.close >= 2) ||
+                       (gt.follows && !gt.big && !others && gt.close >= kAdmitFast))) {
+            gt.in = true; ++g_gt_admits;
+            if (by_vote) ++g_gt_by_vote;
+            else if (gt.att) ++g_gt_by_root;
+        }
+        if (gt.in && g_lk_n < kGrtSet) g_lk_set[g_lk_n++] = gt.model;
+        g_gt[w++] = gt;
+    }
+    g_n_gt = w;
+}
+
+// Once a frame from set_frame.
+void grt_end_frame() {
+    if (!g_grt_target) return;
+    grt_update_lock();
+    g_n_gd = 0;
+}
+
+// --- finding GrTrans by its asserts ---
+struct Sec { const uint8_t* p = nullptr; size_t n = 0; };
+
+void exe_sections(Sec* text, Sec* rdata) {
+    const auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    const IMAGE_SECTION_HEADER* s = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++s) {
+        Sec x{base + s->VirtualAddress, s->Misc.VirtualSize};
+        if (!std::memcmp(s->Name, ".text", 6)) *text = x;
+        if (!std::memcmp(s->Name, ".rdata", 7)) *rdata = x;
+    }
+}
+
+// Start addresses of every NUL-terminated string in `s` that equals `str`
+// (whole) or, with `suffix`, ends with it.
+int find_strings(Sec s, const char* str, bool suffix, const uint8_t** out, int max) {
+    const size_t len = std::strlen(str) + 1;   // with the NUL
+    int n = 0;
+    for (size_t i = 1; i + len <= s.n && n < max; ++i) {
+        if (s.p[i] != (uint8_t)str[0] || std::memcmp(s.p + i, str, len)) continue;
+        size_t b = i;
+        if (suffix) while (b > 0 && s.p[b - 1]) --b;
+        else if (s.p[i - 1]) continue;
+        out[n++] = s.p + b;
+    }
+    return n;
+}
+
+const uint8_t* rip_target(const uint8_t* insn, int len) {   // rel32 in the last 4 bytes
+    int32_t rel; std::memcpy(&rel, insn + len - 4, 4);
+    return insn + len + rel;
+}
+
+bool in_set(const uint8_t* p, const uint8_t* const* set, int n) {
+    for (int i = 0; i < n; ++i) if (set[i] == p) return true;
+    return false;
+}
+
+// The start of the function owning `pc`, following chained unwind entries.
+const uint8_t* function_start(const uint8_t* pc) {
+    DWORD64 image = 0;
+    PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry((DWORD64)pc, &image, nullptr);
+    for (int k = 0; rf && k < 8; ++k) {
+        const uint8_t* ui = reinterpret_cast<const uint8_t*>(image + rf->UnwindData);
+        if (!((ui[0] >> 3) & UNW_FLAG_CHAININFO)) return reinterpret_cast<const uint8_t*>(image + rf->BeginAddress);
+        const int codes = (ui[2] + 1) & ~1;
+        rf = (PRUNTIME_FUNCTION)(ui + 4 + codes * 2);
+    }
+    return nullptr;
+}
+
+// `lea rdx,[file]; lea rcx,[expr]; call` within the first `span` bytes of `fn`.
+bool has_assert(const uint8_t* fn, size_t span, Sec text, const uint8_t* const* files, int nf,
+                const uint8_t* const* exprs, int ne) {
+    for (size_t i = 0; i + 19 <= span; ++i) {
+        const uint8_t* q = fn + i;
+        if (q + 19 > text.p + text.n) return false;
+        if (q[0] != 0x48 || q[1] != 0x8D || q[2] != 0x15 || q[7] != 0x48 || q[8] != 0x8D || q[9] != 0x0D ||
+            q[14] != 0xE8) continue;
+        if (in_set(rip_target(q, 7), files, nf) && in_set(rip_target(q + 7, 7), exprs, ne)) return true;
+    }
+    return false;
+}
+
+void hook_grtrans() {
+    Sec text, rdata;
+    exe_sections(&text, &rdata);
+    if (!text.p || !rdata.p) { log_line("# 4c: exe sections not found"); return; }
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
+    const uint8_t *stencil[2], *files[4], *models[4];
+    const int ns = find_strings(rdata, "data.item->stencilFlags <= 255", false, stencil, 2);
+    const int nf = find_strings(rdata, "\\GrTrans.cpp", true, files, 4);
+    const int nm = find_strings(rdata, "model", false, models, 4);
+    if (ns != 1 || nf < 1 || nm < 1) {
+        log_line("# 4c: anchor strings missing (stencilFlags %d, GrTrans.cpp %d, model %d); no hook", ns, nf, nm);
+        return;
+    }
+    // The per-draw function: the one loading the stencilFlags assert string.
+    const uint8_t* site = nullptr;
+    for (size_t i = 0; i + 7 <= text.n; ++i) {
+        const uint8_t* q = text.p + i;
+        if (q[0] == 0x48 && q[1] == 0x8D && q[2] == 0x0D && rip_target(q, 7) == stencil[0]) { site = q; break; }
+    }
+    const uint8_t* per_draw = site ? function_start(site) : nullptr;
+    if (!per_draw) { log_line("# 4c: stencilFlags assert site %p has no function; no hook", (const void*)site); return; }
+    // Its call to GrTrans: a call near the start whose target asserts `model` in GrTrans.cpp.
+    const uint8_t* target = nullptr;
+    int found = 0;
+    for (size_t i = 0; i + 5 <= 0x600; ++i) {
+        const uint8_t* q = per_draw + i;
+        if (q[0] != 0xE8) continue;
+        const uint8_t* t = rip_target(q, 5);
+        if (t < text.p || t >= text.p + text.n || t == target) continue;
+        if (!has_assert(t, 0x80, text, files, nf, models, nm)) continue;
+        if (!target) target = t;
+        ++found;
+    }
+    log_line("# 4c: per-draw fn rva %llx (assert at %llx), GrTrans bone fn rva %llx, %d candidate(s); "
+             "build 2026-11-24 had ab3ec0 / a9de90",
+             (unsigned long long)(per_draw - base), (unsigned long long)(site - base),
+             (unsigned long long)(target ? target - base : 0), found);
+    if (found != 1) { log_line("# 4c: not exactly one candidate; no hook"); return; }
+    const MH_STATUS init = MH_Initialize();
+    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
+        log_line("# 4c: MinHook init failed (%s)", MH_StatusToString(init));
+        return;
+    }
+    MH_STATUS st = MH_CreateHook((void*)target, (void*)&hk_grt, (void**)&g_grt_orig);
+    if (st == MH_OK) {
+        g_grt_target = (void*)target;
+        st = MH_EnableHook(g_grt_target);
+        if (st != MH_OK) { MH_RemoveHook(g_grt_target); g_grt_target = nullptr; }
+    }
+    log_line("# 4c: GrTrans hook %s (%s)", g_grt_target ? "on" : "FAILED", MH_StatusToString(st));
+}
+
+void unhook_grtrans() {
+    if (!g_grt_target) return;
+    MH_DisableHook(g_grt_target);
+    MH_RemoveHook(g_grt_target);
+    // A game thread may still be inside the hook.
+    for (int k = 0; k < 200 && g_grt_inflight; ++k) Sleep(1);
+    g_grt_target = nullptr;
+}
+
 bool is_mine(uint64_t key) {
     for (int i = 0; i < g_n_mine; ++i)
         if (g_mine[i].key == key) return true;
@@ -752,6 +1460,10 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
 
     // Probe 3b/3c result: only geometry that writes depth. Sprites, particles
     // and glows do not, and they fill the whole cylinder.
+    // Zoomed in, the hair's soft cards and the cape's outer edge are drawn
+    // without depth writes. Such a draw is kept only if it is skinned and its
+    // model is ours.
+    bool nozw = false;
     if (scene) {
         ID3D11DepthStencilState* dss = nullptr;
         UINT ref = 0;
@@ -761,7 +1473,10 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
             dss->GetDesc(&dd);
             dss->Release();
             if (!dd.DepthEnable || dd.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ALL) {
-                scene = false; ++g_skipped_blend;
+                nozw = true;
+                if (!(g_use_tf && g_body_only && g_lock_on && g_grt_target && g_use_model)) {
+                    scene = false; ++g_skipped_blend;
+                }
             }
         }
     }
@@ -804,9 +1519,23 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
         bool tight = false;   // piece with no transform: clip its mask close to the avatar
         bool roomy = false;   // piece with no transform, only copy on screen: wide clip
         bool sure = false;    // identified by its own position or as the only copy: no mask clip
-        if (g_use_tf) {
+        float grt_d = -1.0f; bool grt_skin = false;
+        if (nozw) {
+            accept = false; want_sample = false;
             bool skinned = false;
             const float d = transform_distance(ctx, &skinned);
+            if (skinned && d >= 0.0f && d <= 3.0f) {
+                g_cur_zw0 = true;
+                const int v = grt_note_draw(ctx, false, d, mk, count, true);
+                g_cur_zw0 = false;
+                if (v > 0) { accept = true; sure = true; }
+                grt_d = d; grt_skin = true;
+            }
+            if (!accept) ++g_skipped_blend;
+        } else if (g_use_tf) {
+            bool skinned = false;
+            const float d = transform_distance(ctx, &skinned);
+            grt_d = d; grt_skin = skinned;
             if (d >= 0.0f) {
                 ++g_tf_found;
                 const bool kind_ok = skinned || g_rigid;
@@ -915,6 +1644,21 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 if (lm && !lm->notf) ++g_lost_tf;
             }
         }
+        // Rigid draws near us too: a back item is set up next to the body and
+        // never appears among the skinned draws.
+        if (!nozw && (grt_skin || (grt_d >= 0.0f && grt_d <= 3.0f))) {
+            // A draw whose model is ours is drawn even if its mesh was never
+            // learned (a swapped weapon, a cape in a crowd); one whose model
+            // sits away from our body is not, whatever the cylinder said.
+            const int v = grt_note_draw(ctx, accept, grt_d, mk, count, grt_skin);
+            if (v > 0 && !accept) { accept = true; sure = true; }
+            else if (v > 0) sure = true;
+            else if (v < 0 && accept) accept = false;
+        }
+        // Cloth (capes) carries neither a transform nor bones.
+        if (!accept && lock_mode && !nozw && !grt_skin) {
+            if (cloth_check(ctx, count, start, base) > 0) { accept = true; sure = true; }
+        }
         const bool mine = accept && ensure_mask(rtvs[0]);
         const bool sample = want_sample && g_sampling && g_n_samp < kMaxSample && g_ps_count &&
                             ensure_count_depth(rtvs[0]);
@@ -990,8 +1734,17 @@ void after_draw(ID3D11DeviceContext* ctx, bool instanced, UINT count,
                 ctx->OMSetRenderTargets(1, &g_mask_rtv, nullptr);
                 ctx->OMSetBlendState(nullptr, factor, 0xffffffff);
                 ctx->PSSetShader(g_ps, nullptr, 0);
+                // No culling: the game draws nearly all of a character with
+                // back faces culled, and seen from behind the hair strands and
+                // the inside of a cape are back faces, so they never reached
+                // the mask and the outline had holes there.
+                ID3D11RasterizerState* game_rs = nullptr;
+                ctx->RSGetState(&game_rs);
+                ctx->RSSetState(g_rs_plain);
                 if (instanced) vt_of(ctx).dii(ctx, count, 1, start, base, start_inst);
                 else           vt_of(ctx).di(ctx, count, start, base);
+                ctx->RSSetState(game_rs);
+                if (game_rs) game_rs->Release();
                 g_mask_vp_w = vp.Width; g_mask_vp_h = vp.Height;
                 ++g_masked;
                 ++g_mask_n;
@@ -1028,7 +1781,10 @@ void composite() {
     }
     // Fewer pieces than the held frame had: merge the held copy in, for a few
     // frames at most (a piece really gone, a mount, a gear change).
-    const bool use_hold = n < g_hold_n && g_hold_age < kHoldFrames && g_hold_tex;
+    // Only when most of the mask is missing. In WvW one piece fewer happened in
+    // half the frames, and merging a copy up to 4 frames old each time drew the
+    // outline behind the character whenever it or the camera moved.
+    const bool use_hold = n * 2 < g_hold_n && g_hold_age < kHoldFrames && g_hold_tex;
     if (use_hold) {
         ++g_hold_age; ++g_held_frames;
         if (n == 0) ++g_empty_frames;
@@ -1506,11 +2262,15 @@ bool install(void* swapchain, const char* log_path) {
     }
     log_line("# probe 3r hooks: map %d unmap %d update %d", g_orig_map ? 1 : 0,
              g_orig_unmap ? 1 : 0, g_orig_update ? 1 : 0);
+    hook_grtrans();
     std::snprintf(g_summary, sizeof(g_summary), "probe 3: installed, waiting for MumbleLink");
     return true;
 }
 
 void shutdown() {
+    const bool grt = g_grt_target != nullptr;
+    unhook_grtrans();
+    if (grt && !g_inline) MH_Uninitialize();
     if (g_inline) {
         MH_DisableHook(MH_ALL_HOOKS);
         MH_Uninitialize();
@@ -1543,6 +2303,13 @@ void shutdown() {
     if (g_mask_rtv) { g_mask_rtv->Release(); g_mask_rtv = nullptr; }
     if (g_mask_tex) { g_mask_tex->Release(); g_mask_tex = nullptr; }
     if (g_hold_srv) { g_hold_srv->Release(); g_hold_srv = nullptr; }
+    for (auto& set : g_cloth) {
+        for (auto& c : set.c) {
+            if (c.vb) { c.vb->Release(); c.vb = nullptr; }
+            if (c.ib) { c.ib->Release(); c.ib = nullptr; }
+        }
+        set.n = 0;
+    }
     if (g_hold_tex) { g_hold_tex->Release(); g_hold_tex = nullptr; }
     g_hold_n = 0; g_hold_age = 0; g_mask_n = 0;
     if (g_rs_plain) { g_rs_plain->Release(); g_rs_plain = nullptr; }
@@ -1707,6 +2474,9 @@ void set_frame(const core::Vec3& avatar, const core::CameraState& cam,
                  g_detail_no, g_detail_rows, g_avatar.x, g_avatar.y, g_avatar.z,
                  g_cam_pos.x, g_cam_pos.y, g_cam_pos.z);
     }
+    grt_end_frame();
+    if (g_ctx && g_use_tf) cloth_frame(g_ctx);
+    InterlockedIncrement(&g_present_seq);
     if (g_detail_armed) { g_detail_armed = false; g_detail = true; g_detail_rows = 0; ++g_detail_no; }
     g_draws = 0; g_replayed = 0; g_skipped_blend = 0; g_masked = 0;
     if (g_ready && g_outline && g_samp_age < 0 && ++g_frame_no % kSampleEvery == 0) {
